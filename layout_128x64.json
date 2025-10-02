@@ -1,0 +1,154 @@
+{
+    "_default": {
+        "position": [0, 0],
+        "align": "left-top"
+    },
+    "nfl_team_summary": {
+        "team_logo": {
+            "position": ["48%", 1],
+            "align": "left-top"
+        },
+        "record_header": {
+            "position": [1, 1],
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "record": {
+            "position": [0, 7],
+            "relative": {
+                "to": "record_header",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "record_comment": {
+            "position": [0, 6],
+            "relative": {
+                "to": "record",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "next_game_header": {
+            "position": [0, 8],
+            "relative": {
+                "to": "record_comment",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "next_game_line_1": {
+            "position": [0, 7],
+            "relative": {
+                "to": "next_game_header",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "next_game_line_2": {
+            "position": [0, 7],
+            "relative": {
+                "to": "next_game_line_1",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+         "last_game_header": {
+            "position": [0, 8],
+            "relative": {
+                "to": "next_game_line_2",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "last_game_result": {
+            "position": [0, 7],
+            "relative": {
+                "to": "last_game_header",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        },
+        "last_game_text": {
+            "position": [2, 0],
+            "relative": {
+                "to": "last_game_result",
+                "align": "right"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
+        }
+    },
+    "nfl_game": {
+        "away_team_logo": {
+            "position":[0, "50%"],
+            "align": "left-center"
+        },
+        "away_team_score": {
+            "position":["33%", "100%"],
+            "align": "right-bottom"
+        },
+        "away_team_possesion": {
+            "position":[40, 0],
+            "align": "left"
+        },
+        "home_team_logo": {
+            "position":["100%", "50%"],
+            "align": "right-center"
+        },
+        "home_team_score": {
+            "position":["66%", "100%"],
+            "align": "left-bottom"
+        },
+        "home_team_possesion": {
+            "position":[40, 0],
+            "align": "left"
+        },
+        "time_remaining": {
+            "position":["50%", 0],
+            "align": "center",
+            "font": "wx_small"
+        },
+        "start_time": {
+            "position":["50%", 0],
+            "align": "center",
+            "font": "wx_small"
+        },
+        "quarter": {
+            "position":[0, 1],
+            "relative": {
+                "to": "time_remaining",
+                "align": "left-bottom"
+            }
+        },
+        "VS": {
+            "position": ["50%", "45%"],
+            "align": "center-top",
+            "font": "medium"
+        },
+        "score": {
+            "position": ["50%", "100%"],
+            "align": "center-bottom",
+            "font": "medium"
+        },
+        "scheduled_date": {
+            "position": ["50%", 0],
+            "align": "center-top"
+        },
+        "scheduled_time": {
+            "position": [0, 2],
+            "relative": {
+                "to": "scheduled_date",
+                "align": "center-bottom"
+            },
+            "align": "center-top"
+        }
+    }
+}
