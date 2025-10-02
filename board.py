@@ -9,8 +9,9 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from boards.base_board import BoardBase
 from PIL import Image
+
+from boards.base_board import BoardBase
 from utils import get_file
 
 from . import __board_name__, __description__, __version__
