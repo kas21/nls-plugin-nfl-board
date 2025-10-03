@@ -117,7 +117,7 @@ class NFLBoard(BoardBase):
 
         # Initialize API client
         logo_cache_dir = (
-            self._get_board_directory() / "logos"
+            self._get_board_directory() / "assets/logos/nfl"
             if hasattr(self, '_get_board_directory')
             else None
         )
@@ -988,7 +988,7 @@ class NFLBoard(BoardBase):
                 return processed_offsets
 
         except Exception as error:
-            debug.error(f"NFL Board: Failed to load logo offsets: {error}")
+            debug.error(f"NFL Board: Failed to load image offsets: {error}")
 
         return {"_default": {"zoom": 1.0, "offset": (0, 0)}}
 
