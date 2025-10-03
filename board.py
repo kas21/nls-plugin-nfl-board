@@ -646,7 +646,7 @@ class NFLBoard(BoardBase):
             debug.debug(f"NFL Board: Rendering record comment: {team.record_comment}")
             self._draw_text(layout, "record_comment", team.record_comment.upper())
 
-        # Render next game information
+        # Render next game section
         next_game = self._get_next_game_for_team(team.team_id, team_schedule)
         if hasattr(layout, 'next_game_header'):
             self.matrix.draw_text_layout(
@@ -656,20 +656,14 @@ class NFLBoard(BoardBase):
                 backgroundColor=team.color_secondary
             )
 
-        # Split next game info into two lines
-        next_game_text = self._format_next_game_display(next_game, team.team_id)
-        parts = next_game_text.split(" ", 2)
-        if len(parts) >= 3:
-            line1 = " ".join(parts[:2]).upper()  # "FRI 10/4"
-            line2 = parts[2].upper()             # "1:00 PM VS BUF"
-        else:
-            line1 = next_game_text.upper()
-            line2 = ""
+        date = self._format_game_datetime(next_game, format_type="date_only")
+        time = self._format_game_datetime(next_game, format_type="time_only")
+        opponent = self._format_next_game_display(next_game, team.team_id).get("opponent_text", "").upper()
 
         if hasattr(layout, 'next_game_line_1'):
-            self.matrix.draw_text_layout(layout.next_game_line_1, line1)
+            self.matrix.draw_text_layout(layout.next_game_line_1, date.upper())
         if hasattr(layout, 'next_game_line_2'):
-            self.matrix.draw_text_layout(layout.next_game_line_2, line2)
+            self.matrix.draw_text_layout(layout.next_game_line_2, f"{time.upper()} {opponent.upper()}")
 
         # Render last game information
         last_game = self._get_last_game_for_team(team.team_id, team_schedule)
@@ -724,8 +718,16 @@ class NFLBoard(BoardBase):
             )
         if hasattr(layout, 'record'):
             buffer.draw_text_layout(layout.record, team.record_text)
-        if hasattr(layout, 'record_comment') and team.record_comment:
-            buffer.draw_text_layout(layout.record_comment, team.record_comment.upper())
+        if hasattr(layout, 'record_comment_line_1') and team.record_comment:
+            parts = team.record_comment.split(" ", 2)
+            if len(parts) >= 3:
+                line1 = " ".join(parts[:2]).upper()
+                line2 = parts[2].upper()
+            else:
+                line1 = team.record_comment.upper()
+                line2 = "---"
+            buffer.draw_text_layout(layout.record_comment_line_1, line1)
+            buffer.draw_text_layout(layout.record_comment_line_2, line2)
 
         # Render next game section
         next_game = self._get_next_game_for_team(team.team_id, team_schedule)
@@ -737,19 +739,16 @@ class NFLBoard(BoardBase):
                 backgroundColor=team.color_secondary
             )
 
-        next_game_text = self._format_next_game_display(next_game, team.team_id)
-        parts = next_game_text.split(" ", 2)
-        if len(parts) >= 3:
-            line1 = " ".join(parts[:2]).upper()
-            line2 = parts[2].upper()
-        else:
-            line1 = next_game_text.upper()
-            line2 = ""
+        date = self._format_game_datetime(next_game, format_type="date_only")
+        time = self._format_game_datetime(next_game, format_type="time_only")
+        opponent = self._format_next_game_display(next_game, team.team_id).get("opponent_text", "").upper()
 
         if hasattr(layout, 'next_game_line_1'):
-            buffer.draw_text_layout(layout.next_game_line_1, line1)
+            buffer.draw_text_layout(layout.next_game_line_1, date)
         if hasattr(layout, 'next_game_line_2'):
-            buffer.draw_text_layout(layout.next_game_line_2, line2)
+            buffer.draw_text_layout(layout.next_game_line_2, time)
+        if hasattr(layout, 'next_game_line_3'):
+            buffer.draw_text_layout(layout.next_game_line_3, opponent)
 
         # Render last game section
         last_game = self._get_last_game_for_team(team.team_id, team_schedule)
@@ -770,30 +769,31 @@ class NFLBoard(BoardBase):
             else:
                 fillColor = (200, 200, 50)
             buffer.draw_text_layout(layout.last_game_result, result.upper(), fillColor=fillColor)
+            buffer.draw_text_layout(layout.last_game_score, last_game_results.get('score', '').upper())
         if hasattr(layout, 'last_game_text'):
-            last_game_text = f"{last_game_results.get('score', '')} {last_game_results.get('opponent', '')}".strip()
-            buffer.draw_text_layout(layout.last_game_text, last_game_text.upper())
+            buffer.draw_text_layout(layout.last_game_text, last_game_results.get('opponent', '').upper())
 
         # Get the rendered image from buffer
         scrolling_image = buffer.get_image()
         bbox = scrolling_image.getbbox()
         scrolling_image = scrolling_image.crop(bbox)
         content_height = scrolling_image.height
-        debug.info(f"NFL Board: Scrolling content height = {content_height}")
-        debug.info(f"NFL Board: Scrolling image size = {scrolling_image.size}")
 
         # Scroll the image
         y_offset = 0
 
         # Show top of content
         self.matrix.clear()
+
         # Render team logo
         if hasattr(layout, 'team_logo'):
             team_logo = self._get_team_logo(team)
             if team_logo:
                 self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
                 # Render gradient - after logos but before other visuals
-                self.matrix.draw_image([self.matrix.width/2,0], self.gradient, align="center")
+                if hasattr(layout, 'gradient'):
+                    self.matrix.draw_image_layout(layout.gradient, self.gradient)
+
         self.matrix.draw_image((0, y_offset), scrolling_image)
         self.matrix.render()
         self.sleepEvent.wait(2)  # Hold at top for 2 seconds
@@ -808,7 +808,8 @@ class NFLBoard(BoardBase):
                 if team_logo:
                     self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
                     # Render gradient - after logos but before other visuals
-                    self.matrix.draw_image([self.matrix.width/2,0], self.gradient, align="center")
+                    if hasattr(layout, 'gradient'):
+                        self.matrix.draw_image_layout(layout.gradient, self.gradient)
             self.matrix.draw_image((0, y_offset), scrolling_image)
             self.matrix.render()
             self.sleepEvent.wait(0.15)  # Scroll speed
@@ -1087,7 +1088,12 @@ class NFLBoard(BoardBase):
         else:
             opponent_text = f"@ {opponent.abbreviation}"
 
-        return f"{game_time} {opponent_text}".upper()
+        return {
+            "game_time": game_time,
+            "opponent_text": opponent_text
+        }
+        # SUN 10/4 1:00 PM VS BUF
+        #return f"{game_time} {opponent_text}".upper()
 
     def _format_last_game_display(self, game: Optional[NFLGame], team_id: str) -> str:
         """Format last game result for display."""

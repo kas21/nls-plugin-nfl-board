@@ -8,6 +8,10 @@
             "position": ["48%", 1],
             "align": "left-top"
         },
+        "gradient": {
+            "position": ["40%", 0],
+            "align": "center"
+        },
         "record_header": {
             "position": [1, 1],
             "align": "left-top",

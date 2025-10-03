@@ -8,6 +8,10 @@
             "position": ["48%", 1],
             "align": "left-top"
         },
+        "gradient": {
+            "position": ["37%", 0],
+            "align": "center"
+        },
         "record_header": {
             "position": [1, 1],
             "align": "left-top",
@@ -22,7 +26,7 @@
             "align": "left-top",
             "font": "small"
         },
-        "record_comment": {
+        "record_comment_line_1": {
             "position": [0, 6],
             "relative": {
                 "to": "record",
@@ -31,10 +35,19 @@
             "align": "left-top",
             "font": "small"
         },
+        "record_comment_line_2": {
+            "position": [0, 6],
+            "relative": {
+                "to": "record_comment_line_1",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
         "next_game_header": {
             "position": [0, 8],
             "relative": {
-                "to": "record_comment",
+                "to": "record_comment_line_2",
                 "align": "left"
             }, 
             "align": "left-top",
@@ -58,10 +71,19 @@
             "align": "left-top",
             "font": "small"
         },
+        "next_game_line_3": {
+            "position": [0, 7],
+            "relative": {
+                "to": "next_game_line_2",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
          "last_game_header": {
             "position": [0, 8],
             "relative": {
-                "to": "next_game_line_2",
+                "to": "next_game_line_3",
                 "align": "left"
             }, 
             "align": "left-top",
@@ -76,11 +98,20 @@
             "align": "left-top",
             "font": "small"
         },
-        "last_game_text": {
+        "last_game_score": {
             "position": [2, 0],
             "relative": {
                 "to": "last_game_result",
                 "align": "right"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "last_game_text": {
+            "position": [0, 7],
+            "relative": {
+                "to": "last_game_result",
+                "align": "left"
             }, 
             "align": "left-top",
             "font": "small"
