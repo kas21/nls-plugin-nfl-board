@@ -587,7 +587,6 @@ class NFLBoard(BoardBase):
         if not team.has_detailed_record:
             debug.warning(f"NFL Board: Team {team.display_name} using basic data - detailed record not loaded")
 
-        self.matrix.clear()
         layout = self.get_board_layout('nfl_team_summary')
 
         if not layout:
@@ -595,7 +594,17 @@ class NFLBoard(BoardBase):
             self._render_fallback_team_summary(team)
             return
 
-        debug.debug("NFL Board: Using team summary layout")
+        # Check if content needs scrolling (64x32 displays)
+        if self.matrix.height <= 32:
+            self._render_team_summary_scrolling(team, layout)
+        else:
+            self._render_team_summary_static(team, layout)
+
+    def _render_team_summary_static(self, team: NFLTeam, layout):
+        """Render team summary for larger displays (128x64) - no scrolling needed."""
+        debug.debug("NFL Board: Using static team summary layout")
+
+        self.matrix.clear()
 
         # Get team's schedule data for next/last game info
         snapshot = getattr(self.data, "nfl_board_snapshot", None)
@@ -607,7 +616,6 @@ class NFLBoard(BoardBase):
         if hasattr(layout, 'team_logo'):
             team_logo = self._get_team_logo(team)
             if team_logo:
-                #self.matrix.draw_image_layout(layout.team_logo, team_logo)
                 self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
 
         # Render gradient - after logos but before other visuals
@@ -632,8 +640,6 @@ class NFLBoard(BoardBase):
                 backgroundColor=team.color_secondary
             )
         if hasattr(layout, 'record'):
-            # Use record_text property which has safe fallbacks
-            #record_display = team.record_summary if team.record_summary else team.record_text
             debug.debug(f"NFL Board: Rendering record: {team.record_text}")
             self._draw_text(layout, "record", team.record_text)
         if hasattr(layout, 'record_comment') and team.record_comment:
@@ -692,6 +698,122 @@ class NFLBoard(BoardBase):
         self.matrix.render()
 
         # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_team_summary_scrolling(self, team: NFLTeam, layout):
+        """Render team summary with scrolling for small displays (64x32)."""
+        debug.debug("NFL Board: Using scrolling team summary layout for 64x32")
+
+        # Get team's schedule data
+        snapshot = getattr(self.data, "nfl_board_snapshot", None)
+        team_schedule = []
+        if snapshot and team.team_id in snapshot.team_schedules:
+            team_schedule = snapshot.team_schedules[team.team_id]
+
+        # Create offscreen buffer for scrolling content
+        content_height = 80
+        buffer = self.matrix.create_offscreen_buffer(height=content_height)
+
+        # Render record section
+        if hasattr(layout, 'record_header'):
+            buffer.draw_text_layout(
+                layout.record_header,
+                "RECORD:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+        if hasattr(layout, 'record'):
+            buffer.draw_text_layout(layout.record, team.record_text)
+        if hasattr(layout, 'record_comment') and team.record_comment:
+            buffer.draw_text_layout(layout.record_comment, team.record_comment.upper())
+
+        # Render next game section
+        next_game = self._get_next_game_for_team(team.team_id, team_schedule)
+        if hasattr(layout, 'next_game_header'):
+            buffer.draw_text_layout(
+                layout.next_game_header,
+                "NEXT GAME:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+
+        next_game_text = self._format_next_game_display(next_game, team.team_id)
+        parts = next_game_text.split(" ", 2)
+        if len(parts) >= 3:
+            line1 = " ".join(parts[:2]).upper()
+            line2 = parts[2].upper()
+        else:
+            line1 = next_game_text.upper()
+            line2 = ""
+
+        if hasattr(layout, 'next_game_line_1'):
+            buffer.draw_text_layout(layout.next_game_line_1, line1)
+        if hasattr(layout, 'next_game_line_2'):
+            buffer.draw_text_layout(layout.next_game_line_2, line2)
+
+        # Render last game section
+        last_game = self._get_last_game_for_team(team.team_id, team_schedule)
+        last_game_results = self._format_last_game_display(last_game, team.team_id)
+        if hasattr(layout, 'last_game_header'):
+            buffer.draw_text_layout(
+                layout.last_game_header,
+                "LAST GAME:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+        if hasattr(layout, 'last_game_result'):
+            result = last_game_results.get("result", "")
+            if result == "W":
+                fillColor = (50, 255, 50)
+            elif result == "L":
+                fillColor = (255, 50, 50)
+            else:
+                fillColor = (200, 200, 50)
+            buffer.draw_text_layout(layout.last_game_result, result.upper(), fillColor=fillColor)
+        if hasattr(layout, 'last_game_text'):
+            last_game_text = f"{last_game_results.get('score', '')} {last_game_results.get('opponent', '')}".strip()
+            buffer.draw_text_layout(layout.last_game_text, last_game_text.upper())
+
+        # Get the rendered image from buffer
+        scrolling_image = buffer.get_image()
+        bbox = scrolling_image.getbbox()
+        scrolling_image = scrolling_image.crop(bbox)
+        content_height = scrolling_image.height
+        debug.info(f"NFL Board: Scrolling content height = {content_height}")
+        debug.info(f"NFL Board: Scrolling image size = {scrolling_image.size}")
+
+        # Scroll the image
+        y_offset = 0
+
+        # Show top of content
+        self.matrix.clear()
+        # Render team logo
+        if hasattr(layout, 'team_logo'):
+            team_logo = self._get_team_logo(team)
+            if team_logo:
+                self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+                # Render gradient - after logos but before other visuals
+                self.matrix.draw_image([self.matrix.width/2,0], self.gradient, align="center")
+        self.matrix.draw_image((0, y_offset), scrolling_image)
+        self.matrix.render()
+        self.sleepEvent.wait(2)  # Hold at top for 2 seconds
+
+        # Scroll down until bottom is visible
+        while y_offset > -(content_height - self.matrix.height) and not self.sleepEvent.is_set():
+            y_offset -= 1
+            self.matrix.clear()
+            # Render team logo
+            if hasattr(layout, 'team_logo'):
+                team_logo = self._get_team_logo(team)
+                if team_logo:
+                    self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+                    # Render gradient - after logos but before other visuals
+                    self.matrix.draw_image([self.matrix.width/2,0], self.gradient, align="center")
+            self.matrix.draw_image((0, y_offset), scrolling_image)
+            self.matrix.render()
+            self.sleepEvent.wait(0.15)  # Scroll speed
+
+        # Hold at bottom
         self.sleepEvent.wait(self.config.display_seconds)
 
     def _render_no_content_available(self):
@@ -777,7 +899,7 @@ class NFLBoard(BoardBase):
 
         return None
 
-    def _draw_logo(self, layout, element_name: str, logo: Image, team_abbreviation: str) -> None:
+    def _draw_logo(self, layout, element_name: str, logo: Image, team_abbreviation: str, canvas=None) -> None:
         """
         Draw a team logo using element-specific offsets.
 
@@ -786,9 +908,13 @@ class NFLBoard(BoardBase):
             element_name: Name of the logo element (also used as offset key)
             logo_path: Path to the logo image file
             team_abbreviation: Team abbreviation for offset lookup
+            canvas: Optional canvas to draw on (defaults to main matrix)
         """
         if not hasattr(layout, element_name) or not logo:
             return
+
+        if not canvas:
+            canvas = self.matrix
 
         # Use element_name as the offset key
         offsets = self._get_logo_offsets(team_abbreviation, element_name)
@@ -816,7 +942,7 @@ class NFLBoard(BoardBase):
         x, y = element.position
         element.position = (x + offset_x, y + offset_y)
 
-        self.matrix.draw_image_layout(element, logo)
+        canvas.draw_image_layout(element, logo)
 
     @staticmethod
     def _thumbnail_filter():
