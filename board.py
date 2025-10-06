@@ -16,6 +16,7 @@ from utils import get_file
 
 from . import __board_name__, __description__, __version__
 from .data import NFLApiClient, NFLDataSnapshot, NFLGame, NFLTeam
+from .logos import NFLLogoManager
 
 debug = logging.getLogger("scoreboard")
 class NFLBoardConfig:
@@ -116,12 +117,15 @@ class NFLBoard(BoardBase):
             raise
 
         # Initialize API client
+        self.api_client = NFLApiClient()
+
+        # Initialize logo manager
         logo_cache_dir = (
             self._get_board_directory() / "assets/logos/nfl"
             if hasattr(self, '_get_board_directory')
             else None
         )
-        self.api_client = NFLApiClient(logo_cache_dir)
+        self.logo_manager = NFLLogoManager(logo_cache_dir)
 
         # Display state management - unified approach
         self.current_display_items = []  # Unified list of games and team summaries
@@ -137,23 +141,14 @@ class NFLBoard(BoardBase):
 
         # Set up scheduled data refresh using APScheduler
         self._scheduled_job_id = f"nfl_board_data_refresh_{id(self)}"
-        self._setup_data_refresh_schedule()
 
-        # Initialize with existing data if available
+        # Perform initial data refresh
         existing_snapshot = getattr(self.data, "nfl_board_snapshot", None)
         if existing_snapshot is None:
-            # Force initial basic data fetch for immediate display
-            self._perform_basic_data_refresh()
-            # Schedule full data refresh for background
-            scheduler = getattr(self.data, "scheduler", None)
-            if scheduler:
-                scheduler.add_job(
-                    self._perform_full_data_refresh,
-                    "date",
-                    run_date=datetime.now() + timedelta(seconds=1),
-                    id=f"{self._scheduled_job_id}_initial_full",
-                    max_instances=1
-                )
+            self._perform_data_refresh()
+
+        # Schedule recurring data refresh
+        self._setup_data_refresh_schedule()
 
         debug.info("NFL Board: Initialization complete")
 
@@ -206,85 +201,29 @@ class NFLBoard(BoardBase):
         """Set up background data refresh using APScheduler."""
         scheduler = getattr(self.data, "scheduler", None)
         if not scheduler:
-            debug.warning("NFL Board: No scheduler available, forcing immediate refresh")
-            self._perform_scheduled_data_refresh()
+            debug.warning("NFL Board: No scheduler available")
             return
 
         # Only add job if it doesn't already exist
         if not scheduler.get_job(self._scheduled_job_id):
             scheduler.add_job(
-                self._perform_full_data_refresh,
+                self._perform_data_refresh,
                 "interval",
                 seconds=self.config.refresh_seconds,
                 id=self._scheduled_job_id,
                 max_instances=1,
                 replace_existing=True,
             )
-            debug.info(f"NFL Board: Scheduled full data refresh every {self.config.refresh_seconds} seconds")
+            debug.info(f"NFL Board: Scheduled data refresh every {self.config.refresh_seconds} seconds")
         else:
             debug.info("NFL Board: Data refresh job already scheduled")
 
-    def _perform_basic_data_refresh(self):
+    def _perform_data_refresh(self):
         """
-        Quick initial data refresh for immediate display.
-        Fetches minimal data: teams list and today's games.
+        Complete data refresh with all NFL information.
+        Fetches comprehensive data: teams, detailed records, games, and schedules.
         """
-        debug.info("NFL Board: Performing basic data refresh")
-
-        try:
-            # Create new data snapshot
-            snapshot = NFLDataSnapshot()
-
-            # Fetch all teams data (basic info only)
-            all_teams = self.api_client.get_all_teams()
-            if not all_teams:
-                snapshot.error_message = "Failed to fetch teams data"
-                debug.error("NFL Board: Failed to fetch teams data")
-                self.data.nfl_board_snapshot = snapshot
-                return
-
-            snapshot.all_teams = all_teams
-
-            # Get favorite teams subset (basic info only for now)
-            snapshot.favorite_teams = {
-                team_id: team for team_id, team in all_teams.items()
-                if team_id in self.config.team_ids
-            }
-
-            # Fetch today's games only (for quick display)
-            today = datetime.now()
-            snapshot.todays_games = self.api_client.get_scoreboard_for_date(today)
-
-            # Identify live games
-            snapshot.live_games = [game for game in snapshot.todays_games if game.is_live]
-
-            # Get favorite team games from today only
-            favorite_team_games = []
-            for game in snapshot.todays_games:
-                if any(game.involves_team(team_id) for team_id in self.config.team_ids):
-                    favorite_team_games.append(game)
-
-            snapshot.favorite_team_games = favorite_team_games
-
-            # Store snapshot for board to use
-            self.data.nfl_board_snapshot = snapshot
-
-            debug.info(f"NFL Board: Basic data refresh complete - {len(snapshot.todays_games)} today, "
-                      f"{len(snapshot.favorite_team_games)} favorite team games")
-
-        except Exception as error:
-            debug.error(f"NFL Board: Basic data refresh failed: {error}")
-            # Store error snapshot
-            error_snapshot = NFLDataSnapshot()
-            error_snapshot.error_message = f"Basic data refresh failed: {error}"
-            self.data.nfl_board_snapshot = error_snapshot
-
-    def _perform_full_data_refresh(self):
-        """
-        Complete data refresh with all details.
-        Fetches comprehensive data: detailed team records, schedules, yesterday's games, etc.
-        """
-        debug.info("NFL Board: Performing full data refresh")
+        debug.info("NFL Board: Performing data refresh")
 
         try:
             # Create new data snapshot
@@ -300,7 +239,7 @@ class NFLBoard(BoardBase):
 
             snapshot.all_teams = all_teams
 
-            # Populate detailed information for ALL teams (not just favorites)
+            # Populate detailed information for ALL teams
             # This gives us full records, standings info, etc.
             all_team_ids = list(all_teams.keys())
             detailed_count = self.api_client.populate_team_details(all_team_ids)
@@ -342,16 +281,16 @@ class NFLBoard(BoardBase):
             self.data.nfl_board_snapshot = snapshot
 
             debug.info(
-                f"NFL Board: Full data refresh complete - {len(snapshot.todays_games)} today, "
+                f"NFL Board: Data refresh complete - {len(snapshot.todays_games)} today, "
                 f"{len(snapshot.yesterdays_games)} yesterday, "
                 f"{len(snapshot.favorite_team_games)} favorite team games"
             )
 
         except Exception as error:
-            debug.error(f"NFL Board: Full data refresh failed: {error}")
+            debug.error(f"NFL Board: Data refresh failed: {error}")
             # Store error snapshot
             error_snapshot = NFLDataSnapshot()
-            error_snapshot.error_message = f"Full data refresh failed: {error}"
+            error_snapshot.error_message = f"Data refresh failed: {error}"
             self.data.nfl_board_snapshot = error_snapshot
 
 
@@ -884,8 +823,8 @@ class NFLBoard(BoardBase):
             return self.logo_cache[cache_key]
 
         try:
-            # First try the API client's logo path resolution and download functionality
-            logo_path = self.api_client.get_team_logo_path(team, size=128, download_if_missing=True)
+            # Use the logo manager for logo path resolution and download functionality
+            logo_path = self.logo_manager.get_team_logo_path(team, size=128, download_if_missing=True)
 
             if logo_path and logo_path.exists():
                 logo_image = Image.open(logo_path)
