@@ -2,25 +2,72 @@
 
 A NFL scoreboard plugin for the NHL LED Scoreboard that shows live games, scores, team information, and schedules for your favorite NFL teams.
 
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Display Modes](#display-modes)
+- [Layouts](#layouts)
+- [Logo Customization](#logo-customization)
+- [Data Refresh](#data-refresh)
+- [Screenshots](#screenshots)
+
 ## Features
 
 - **Live Game Display**: Real-time scores and game status for ongoing NFL games
 - **Game Schedules**: Shows upcoming games with dates and times
 - **Completed Games**: Displays final scores for finished games
-- **Team Summaries**: When no games are scheduled, shows team records, next game, and last game results
+- **Team Summaries**: Shows team records, next game, and last game results
 - **Multi-Team Support**: Track multiple favorite teams simultaneously
 - **Flexible Display Options**:
   - Show only your favorite team's games
   - Show all NFL games happening today
   - Control when previous day's games are hidden
 - **Team Logos**: Automatic logo downloading and caching with customizable positioning
-- **Responsive Layouts**: Supports both 64x32 and 128x64 matrix sizes
+- **LED Matrix Sizes**: Supports both 64x32 and 128x64 matrix sizes
 
 ## Installation
 
 Use the NHL Led Scoreboard's plugin manager python script to install:
 
-`python plugins.py add https://github.com/kas21/nls-plugin-nfl_board.git`
+`python plugins.py sync` if board is in your scoreboard's plugins.json
+
+or
+
+`python plugins.py add https://github.com/kas21/nls-plugin-nfl-board.git --ref latest`
+
+After the plugin is installed, add `nfl_board` to your NHL-LED-Scoreboard's main configuration:
+
+`nano config/config.json`
+
+For example, to add it to the off day rotation:
+
+```json
+"states": {
+    "off_day": [
+        "season_countdown",
+        "nfl_board",
+        "team_summary",
+        "scoreticker",
+        "clock"
+    ]
+}
+```
+
+**Note:** You must restart the scoreboard for changes to take effect.
+
+### Optional Configuration
+
+To customize the `nfl_board` settings, copy the sample config to create your own configuration file:
+
+```bash
+cd src/boards/plugins/nfl_board
+cp config.json.sample config.json
+nano config.json
+```
+
+**Note:** You must restart the scoreboard for changes to take effect.
 
 ## Configuration
 
@@ -46,7 +93,7 @@ Create a configuration entry in your scoreboard config file:
 | `refresh_seconds` | Integer | 300 | Seconds between data refreshes |
 | `show_all_games` | Boolean | false | Show all NFL games, not just favorite teams |
 | `show_previous_games_until` | String | "06:00" | Time (HH:MM) until which to show previous day's games |
-| `enabled` | Boolean | true | Enable/disable the board |
+| `enabled` | Boolean | true | Enable/disable the board (currently not functional) |
 
 ### Finding Team IDs
 
@@ -61,29 +108,31 @@ Team IDs correspond to ESPN's NFL team identifiers. Common team IDs include:
 - **NFC South**: Atlanta Falcons (1), Carolina Panthers (29), New Orleans Saints (18), Tampa Bay Buccaneers (27)
 - **NFC West**: Arizona Cardinals (22), Los Angeles Rams (14), San Francisco 49ers (25), Seattle Seahawks (26)
 
-Use the `nfl_team_finder.py` utility to find team IDs programmatically.
-
 ## Display Modes
 
 The board intelligently displays different content based on game status:
 
 ### Live Games
+
 - Team logos and abbreviations
 - Current score
 - Quarter and time remaining
 
 ### Upcoming Games
+
 - Team logos and abbreviations
 - Team records
 - Game date and time
 - "VS" indicator
 
 ### Completed Games
+
 - Team logos and abbreviations
 - Final score
 - "FINAL" status
 
 ### Team Summary (when no games scheduled)
+
 - Team logo
 - Team name with team colors
 - Season record
@@ -98,6 +147,7 @@ The plugin includes pre-configured layouts for different matrix sizes:
 - `layout_128x64.json` - For 128x64 pixel displays
 
 Layouts define the positioning of:
+
 - Team logos
 - Team names
 - Scores/records
@@ -106,7 +156,9 @@ Layouts define the positioning of:
 
 ## Logo Customization
 
-Team logo positioning can be customized in `logo_offsets.json`:
+Team logo positioning and sizing can be customized in `logo_offsets.json`. The plugin supports element-specific offsets to handle different display contexts (team summary, home team in game, away team in game).
+
+### Configuration Structure
 
 ```json
 {
@@ -114,14 +166,44 @@ Team logo positioning can be customized in `logo_offsets.json`:
         "zoom": 1.0,
         "offset": [0, 0]
     },
-    "DAL": {
-        "zoom": 1.2,
-        "offset": [2, -1]
+    "WSH": {
+        "team_logo": {
+            "zoom": 1.1,
+            "offset": [-4, 0]
+        },
+        "home_team_logo": {
+            "zoom": 1.4,
+            "offset": [0, 7]
+        },
+        "away_team_logo": {
+            "zoom": 1.4,
+            "offset": [0, 0]
+        }
     }
 }
 ```
 
-Logos are automatically downloaded and cached in the `logos/` directory.
+### Offset Keys
+
+- **`_default`**: Global fallback settings applied to all teams/elements unless overridden
+- **`team_logo`**: Used when displaying team summaries (when no games are scheduled)
+- **`home_team_logo`**: Used when the team is the home team in a game display
+- **`away_team_logo`**: Used when the team is the away team in a game display
+
+### Offset Hierarchy
+
+The plugin uses a fallback hierarchy when looking up logo settings:
+
+1. Element-specific offset (e.g., `BUF.home_team_logo`)
+2. Team default (e.g., `BUF._default`)
+3. Global default (`_default`)
+
+### Parameters
+
+- **`zoom`**: Scale factor for the logo (1.0 = original size, 1.2 = 20% larger, 0.8 = 20% smaller)
+- **`offset`**: `[x, y]` pixel offset for fine-tuning logo position
+
+Logos are automatically downloaded from ESPN and cached in the `assets/logos/nfl/` directory.
 
 ## Data Refresh
 
@@ -132,3 +214,28 @@ The board uses a two-tier refresh strategy:
 
 This ensures the board is responsive at startup while providing complete information during normal operation.
 
+## Screenshots
+
+### 64x32 Display
+
+#### Upcoming/Live/Completed Game
+
+![NFL Game Display 64x32](assets/images/nfl_board_game_64.jpg)
+
+#### Team Summary
+
+![NFL Team Summary 64x32](assets/images/nfl_board_team_summary_64.jpg)
+
+### 128x64 Display
+
+#### Game Display
+
+![NFL Game Display 128x64](assets/images/nfl_board_game_128.jpg)
+
+#### Team Summary - Washington Commanders
+
+![NFL Team Summary 128x64 - Washington](assets/images/nfl_board_team_summary_128_wsh.jpg)
+
+#### Team Summary - Buffalo Bills
+
+![NFL Team Summary 128x64 - Buffalo](assets/images/nfl_board_team_summary_128_bills.jpg)
