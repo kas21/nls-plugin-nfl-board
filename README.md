@@ -1,6 +1,8 @@
 # NFL Board Plugin
 
-A NFL scoreboard plugin for the NHL LED Scoreboard that shows live games, scores, team information, and schedules for your favorite NFL teams.
+A NFL scoreboard plugin for the [NHL LED Scoreboard](https://github.com/falkyre/nhl-led-scoreboard) that shows live games, scores, team information, and schedules for your favorite NFL teams.
+
+![NFL Team Summary 128x64 - Washington](assets/images/nfl_board_team_summary_128_wsh.jpg)
 
 ## Table of Contents
 
@@ -10,7 +12,6 @@ A NFL scoreboard plugin for the NHL LED Scoreboard that shows live games, scores
 - [Display Modes](#display-modes)
 - [Layouts](#layouts)
 - [Logo Customization](#logo-customization)
-- [Data Refresh](#data-refresh)
 - [Screenshots](#screenshots)
 
 ## Features
@@ -20,10 +21,7 @@ A NFL scoreboard plugin for the NHL LED Scoreboard that shows live games, scores
 - **Completed Games**: Displays final scores for finished games
 - **Team Summaries**: Shows team records, next game, and last game results
 - **Multi-Team Support**: Track multiple favorite teams simultaneously
-- **Flexible Display Options**:
-  - Show only your favorite team's games
-  - Show all NFL games happening today
-  - Control when previous day's games are hidden
+- **Flexible Display Options**: Show only your favorite team's games or all NFL games happening today
 - **Team Logos**: Automatic logo downloading and caching with customizable positioning
 - **LED Matrix Sizes**: Supports both 64x32 and 128x64 matrix sizes
 
@@ -57,7 +55,7 @@ For example, to add it to the off day rotation:
 
 **Note:** You must restart the scoreboard for changes to take effect.
 
-### Optional Configuration
+## Configuration
 
 To customize the `nfl_board` settings, copy the sample config to create your own configuration file:
 
@@ -69,9 +67,7 @@ nano config.json
 
 **Note:** You must restart the scoreboard for changes to take effect.
 
-## Configuration
-
-Create a configuration entry in your scoreboard config file:
+### Example Configuration
 
 ```json
 {
@@ -190,29 +186,12 @@ Team logo positioning and sizing can be customized in `logo_offsets.json`. The p
 - **`home_team_logo`**: Used when the team is the home team in a game display
 - **`away_team_logo`**: Used when the team is the away team in a game display
 
-### Offset Hierarchy
-
-The plugin uses a fallback hierarchy when looking up logo settings:
-
-1. Element-specific offset (e.g., `BUF.home_team_logo`)
-2. Team default (e.g., `BUF._default`)
-3. Global default (`_default`)
-
 ### Parameters
 
 - **`zoom`**: Scale factor for the logo (1.0 = original size, 1.2 = 20% larger, 0.8 = 20% smaller)
 - **`offset`**: `[x, y]` pixel offset for fine-tuning logo position
 
 Logos are automatically downloaded from ESPN and cached in the `assets/logos/nfl/` directory.
-
-## Data Refresh
-
-The board uses a two-tier refresh strategy:
-
-1. **Basic Refresh** (on startup): Quickly fetches today's games for immediate display
-2. **Full Refresh** (periodic): Comprehensive data including team details, schedules, and yesterday's games
-
-This ensures the board is responsive at startup while providing complete information during normal operation.
 
 ## Screenshots
 
