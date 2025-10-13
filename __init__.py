@@ -1,28 +1,20 @@
 """
 NFL Board to show basic info about your favorite team
 """
+import json
+from pathlib import Path
 
-# Board metadata using standard Python package conventions
-__plugin_id__ = "nfl_board"  # Canonical folder name for installation
-__version__ = "1.0.0"
-__description__ = "NFL Team Board"
-__board_name__ = "NFL Board"
-__author__ = "NHL LED Scoreboard"
+# Load plugin metadata
+_plugin_dir = Path(__file__).parent
+with open(_plugin_dir / "plugin.json") as f:
+    _metadata = json.load(f)
 
-# Board requirements (optional)
-__requirements__ = []
-
-# Minimum application version required (optional)
-__min_app_version__ = "1.0.0"
-
-# Files to preserve during plugin updates/removals (optional)
-# The plugin manager will preserve these files when updating or removing with --keep-config
-# Supports glob patterns like *.csv, data/*, custom_*
-# Default if not specified: ["config.json", "*.csv", "data/*", "custom_*"]
-__preserve_files__ = [
-    "config.json",
-    "logo_offsets.json",
-    # Add other user-modifiable files here, e.g.:
-    # "custom_data.csv",
-    # "data/*.json",
-]
+# Expose metadata as module variables (backward compatibility)
+__plugin_id__ = _metadata["name"]
+__version__ = _metadata["version"]
+__description__ = _metadata["description"]
+__board_name__ = _metadata["description"]
+__author__ = _metadata.get("author", "")
+__requirements__ = _metadata.get("requirements", {}).get("python_dependencies", [])
+__min_app_version__ = _metadata.get("requirements", {}).get("app_version", "")
+__preserve_files__ = _metadata.get("preserve_files", [])
