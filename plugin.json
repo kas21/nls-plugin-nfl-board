@@ -1,0 +1,25 @@
+{
+  "name": "nfl_board",
+  "version": "2025.10.01",
+  "description": "NFL Team Board",
+  "author": "kas",
+  "enabled": true,
+
+  "boards": [
+    {
+      "id": "nfl_board",
+      "class_name": "NFLBoard",
+      "module": "board"
+    }
+  ],
+
+  "requirements": {
+    "app_version": ">=2025.10.1",
+    "python_dependencies": []
+  },
+
+  "preserve_files": [
+    "config.json",
+    "logo_offsets.json"
+  ]
+}

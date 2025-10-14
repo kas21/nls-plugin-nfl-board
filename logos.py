@@ -42,7 +42,45 @@ class NFLLogoManager:
 
         # Ensure logo cache directory exists
         self.logo_cache_directory.mkdir(parents=True, exist_ok=True)
-        self.change_ownership(self.logo_cache_directory)
+
+        # Fix ownership of the entire directory tree that was created
+        self._fix_directory_tree_ownership()
+
+    def _fix_directory_tree_ownership(self):
+        """
+        Fix ownership of all parent directories in the cache directory path.
+        This ensures that when mkdir(parents=True) creates intermediate directories,
+        they all get proper ownership (e.g., assets/, assets/logos/, assets/logos/nfl/).
+        """
+        if platform.system() != 'Linux':
+            return
+
+        if not (hasattr(os, "chown") and uid is not None and gid is not None):
+            return
+
+        # Fix ownership for all parent directories from the cache directory up
+        current = self.logo_cache_directory
+        paths_to_fix = []
+
+        # Collect all paths from the cache directory up to the working directory
+        while current != Path('.') and current != Path('/'):
+            paths_to_fix.append(current)
+            current = current.parent
+            # Stop if we reach a directory that already has the correct ownership
+            try:
+                stat_info = os.stat(str(current))
+                if stat_info.st_uid == uid:
+                    break
+            except:
+                pass
+
+        # Fix ownership starting from the topmost directory down
+        for path in reversed(paths_to_fix):
+            try:
+                os.chown(str(path), uid, gid)
+                debug.debug(f"NFL Logo Manager: Fixed ownership of directory {path}")
+            except Exception as exc:
+                debug.warning(f"NFL Logo Manager: Failed to chown directory {path}: {exc}")
 
     def change_ownership(self, path: Path):
         """
