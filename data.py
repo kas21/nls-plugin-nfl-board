@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from utils import sb_cache
+
 debug = logging.getLogger("scoreboard")
 
 def parse_espn_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -142,20 +144,51 @@ class NFLApiClient:
     and stored in NFLDataSnapshot.get_teams_by_division() method.
     """
 
-    def __init__(self):
+    def __init__(self, cache_expiration_seconds: int = 300):
         self.base_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
         self.teams_cache: Dict[str, NFLTeam] = {}
         self.last_teams_fetch: Optional[datetime] = None
+        self.cache_expiration_seconds = cache_expiration_seconds
+        debug.info(f"NFL API Client: Initialized with cache expiration of {cache_expiration_seconds} seconds")
 
     def get_scoreboard_for_date(self, date: datetime) -> List[NFLGame]:
         """
         Get all games for a specific date using ESPN scoreboard endpoint.
         Date format: YYYYMMDD
+
+        Uses stale-while-revalidate pattern: returns cached data (even if expired)
+        for fast startup, then fetches fresh data if cache is expired.
         """
         date_string = date.strftime("%Y%m%d")
+        cache_key = f"nfl_scoreboard_{date_string}"
+
+        # Try to get from cache first (even if expired)
+        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        if cached_data is not None:
+            debug.debug(f"NFL Board: Using cached scoreboard data for {date_string} (may be stale)")
+            # Parse cached data back into game objects
+            games = []
+            for game_dict in cached_data:
+                # Reconstruct game from cached dict
+                game = self._dict_to_game(game_dict)
+                if game:
+                    games.append(game)
+
+            # Check if cache is still valid
+            cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
+            if cached_with_expiry is not None and cached_with_expiry[0] is not None:
+                # Cache is still valid, return immediately
+                debug.debug(f"NFL Board: Cache is valid for {date_string}")
+                return games
+            else:
+                # Cache is expired but we'll use it anyway and refresh in background
+                debug.debug(f"NFL Board: Cache expired for {date_string}, will refresh")
+                # We'll still try to fetch fresh data below, but return stale data if fetch fails
+                stale_games = games
+
         url = f"{self.base_url}/scoreboard?dates={date_string}"
 
-        debug.debug(f"NFL Board: Fetching scoreboard for {date_string}")
+        debug.debug(f"NFL Board: Fetching scoreboard for {date_string} from API")
 
         try:
             response = httpx.get(url, timeout=10)
@@ -171,10 +204,20 @@ class NFLApiClient:
                     games.append(game)
 
             debug.debug(f"NFL Board: Found {len(games)} games for {date_string}")
+
+            # Cache the results as dicts
+            games_as_dicts = [self._game_to_dict(game) for game in games]
+            sb_cache.set(cache_key, games_as_dicts, expire=self.cache_expiration_seconds)
+            debug.debug(f"NFL Board: Cached scoreboard for {date_string} ({self.cache_expiration_seconds}s expiration)")
+
             return games
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch scoreboard for {date_string}: {exc}")
+            # Return stale data if we have it
+            if 'stale_games' in locals():
+                debug.info(f"NFL Board: Using stale cache data due to API failure")
+                return stale_games
             return []
 
     def get_current_scoreboard(self) -> List[NFLGame]:
@@ -185,15 +228,37 @@ class NFLApiClient:
         """
         Get basic NFL teams information (no detailed records).
         Use get_team_details() to populate full details for specific teams.
+
+        Uses stale-while-revalidate pattern: returns cached data (even if expired)
+        for fast startup, then fetches fresh data if cache is expired.
         """
-        # Use cached data if less than 1 hour old
-        if (self.teams_cache and self.last_teams_fetch and
-            datetime.now() - self.last_teams_fetch < timedelta(hours=1)):
-            return self.teams_cache
+        cache_key = "nfl_all_teams"
+
+        # Try to get from disk cache first (even if expired)
+        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        if cached_data is not None:
+            debug.debug("NFL Board: Using cached teams data (may be stale)")
+            teams = {}
+            for team_id, team_dict in cached_data.items():
+                team = self._dict_to_team(team_dict)
+                if team:
+                    teams[team_id] = team
+            self.teams_cache = teams
+
+            # Check if cache is still valid
+            cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
+            if cached_with_expiry is not None and cached_with_expiry[0] is not None:
+                # Cache is still valid, return immediately
+                debug.debug("NFL Board: Cache is valid for teams")
+                return teams
+            else:
+                # Cache is expired but we'll use it anyway and refresh in background
+                debug.debug("NFL Board: Cache expired for teams, will refresh")
+                stale_teams = teams
 
         try:
             url = f"{self.base_url}/teams"
-            debug.info("NFL Board: Fetching basic teams data")
+            debug.info("NFL Board: Fetching basic teams data from API")
 
             response = httpx.get(url, timeout=10)
             response.raise_for_status()
@@ -215,21 +280,55 @@ class NFLApiClient:
             self.teams_cache = teams
             self.last_teams_fetch = datetime.now()
 
-            debug.info(f"NFL Board: Cached {len(teams)} basic teams")
+            # Cache the teams as dicts
+            teams_as_dicts = {team_id: self._team_to_dict(team) for team_id, team in teams.items()}
+            sb_cache.set(cache_key, teams_as_dicts, expire=self.cache_expiration_seconds)
+            debug.info(f"NFL Board: Cached {len(teams)} basic teams ({self.cache_expiration_seconds}s expiration)")
+
             return teams
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch teams: {exc}")
-            return self.teams_cache
+            # Return stale data if we have it
+            if 'stale_teams' in locals():
+                debug.info("NFL Board: Using stale cache data due to API failure")
+                return stale_teams
+            return self.teams_cache if self.teams_cache else {}
 
     def get_team_schedule(self, team_id: str) -> List[NFLGame]:
         """
         Get schedule for a specific team.
         Returns recent and upcoming games.
+
+        Uses stale-while-revalidate pattern: returns cached data (even if expired)
+        for fast startup, then fetches fresh data if cache is expired.
         """
+        cache_key = f"nfl_schedule_{team_id}"
+
+        # Try to get from cache first (even if expired)
+        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        if cached_data is not None:
+            debug.debug(f"NFL Board: Using cached schedule data for team {team_id} (may be stale)")
+            games = []
+            for game_dict in cached_data:
+                game = self._dict_to_game(game_dict)
+                if game:
+                    games.append(game)
+
+            # Check if cache is still valid
+            cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
+            if cached_with_expiry is not None and cached_with_expiry[0] is not None:
+                # Cache is still valid, return immediately
+                debug.debug(f"NFL Board: Cache is valid for team {team_id} schedule")
+                return games
+            else:
+                # Cache is expired but we'll use it anyway and refresh in background
+                debug.debug(f"NFL Board: Cache expired for team {team_id} schedule, will refresh")
+                stale_games = games
+
         try:
             url = f"{self.base_url}/teams/{team_id}/schedule"
-            debug.debug(f"NFL Board: Fetching schedule for team {team_id}")
+            debug.debug(f"NFL Board: Fetching schedule for team {team_id} from API")
 
             response = httpx.get(url, timeout=10)
             response.raise_for_status()
@@ -244,10 +343,20 @@ class NFLApiClient:
                     games.append(game)
 
             debug.debug(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
+
+            # Cache the schedule as dicts
+            games_as_dicts = [self._game_to_dict(game) for game in games]
+            sb_cache.set(cache_key, games_as_dicts, expire=self.cache_expiration_seconds)
+            debug.debug(f"NFL Board: Cached schedule for team {team_id} ({self.cache_expiration_seconds}s expiration)")
+
             return games
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch schedule for team {team_id}: {exc}")
+            # Return stale data if we have it
+            if 'stale_games' in locals():
+                debug.info(f"NFL Board: Using stale cache data due to API failure")
+                return stale_games
             return []
 
     def _parse_basic_team_data(self, team_data: Dict[str, Any]) -> Optional[NFLTeam]:
@@ -501,10 +610,34 @@ class NFLApiClient:
         """
         Fetch detailed team information and update the cached team.
         Returns True if successful, False otherwise.
+
+        Uses stale-while-revalidate pattern: returns cached data (even if expired)
+        for fast startup, then fetches fresh data if cache is expired.
         """
+        cache_key = f"nfl_team_details_{team_id}"
+
+        # Try to get from cache first (even if expired)
+        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        if cached_data is not None:
+            debug.debug(f"NFL Board: Using cached detailed data for team {team_id} (may be stale)")
+            detailed_team = self._dict_to_team(cached_data)
+            if detailed_team and team_id in self.teams_cache:
+                self.teams_cache[team_id] = detailed_team
+
+                # Check if cache is still valid
+                cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
+                if cached_with_expiry is not None and cached_with_expiry[0] is not None:
+                    # Cache is still valid, return immediately
+                    debug.debug(f"NFL Board: Cache is valid for team {team_id} details")
+                    return True
+                else:
+                    # Cache is expired but we'll use it anyway and refresh in background
+                    debug.debug(f"NFL Board: Cache expired for team {team_id} details, will refresh")
+                    # Continue to fetch fresh data below
+
         try:
             url = f"{self.base_url}/teams/{team_id}"
-            debug.debug(f"NFL Board: Fetching detailed data for team {team_id}")
+            debug.debug(f"NFL Board: Fetching detailed data for team {team_id} from API")
 
             response = httpx.get(url, timeout=10)
             response.raise_for_status()
@@ -514,7 +647,11 @@ class NFLApiClient:
             if detailed_team and team_id in self.teams_cache:
                 # Update the cached team with detailed information
                 self.teams_cache[team_id] = detailed_team
-                debug.debug(f"NFL Board: Updated team {team_id} with detailed record data")
+
+                # Cache the detailed team data
+                team_dict = self._team_to_dict(detailed_team)
+                sb_cache.set(cache_key, team_dict, expire=self.cache_expiration_seconds)
+                debug.debug(f"NFL Board: Updated and cached team {team_id} with detailed record data")
                 return True
             else:
                 debug.warning(f"NFL Board: Failed to get detailed data for team {team_id}")
@@ -522,6 +659,10 @@ class NFLApiClient:
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch team details for {team_id}: {exc}")
+            # If we had stale cached data, we already updated teams_cache with it, so return True
+            if cached_data is not None:
+                debug.info(f"NFL Board: Using stale cache data for team {team_id} due to API failure")
+                return True
             return False
 
     def populate_team_details(self, team_ids: List[str]) -> int:
@@ -548,6 +689,100 @@ class NFLApiClient:
             return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
         except (ValueError, TypeError):
             return (255, 255, 255)  # Default to white
+
+    def _team_to_dict(self, team: NFLTeam) -> dict:
+        """Convert NFLTeam dataclass to dict for caching."""
+        return {
+            'team_id': team.team_id,
+            'name': team.name,
+            'abbreviation': team.abbreviation,
+            'display_name': team.display_name,
+            'location': team.location,
+            'color_primary': team.color_primary,
+            'color_secondary': team.color_secondary,
+            'logo_url': team.logo_url,
+            'record_wins': team.record_wins,
+            'record_losses': team.record_losses,
+            'record_ties': team.record_ties,
+            'record_summary': team.record_summary,
+            'record_comment': team.record_comment,
+            'win_percent': team.win_percent,
+            'division_id': team.division_id,
+            'conference_id': team.conference_id,
+            'division_name': team.division_name,
+        }
+
+    def _dict_to_team(self, data: dict) -> Optional[NFLTeam]:
+        """Convert dict to NFLTeam dataclass from cache."""
+        try:
+            return NFLTeam(
+                team_id=data['team_id'],
+                name=data['name'],
+                abbreviation=data['abbreviation'],
+                display_name=data['display_name'],
+                location=data['location'],
+                color_primary=tuple(data['color_primary']),
+                color_secondary=tuple(data['color_secondary']),
+                logo_url=data.get('logo_url'),
+                record_wins=data.get('record_wins', 0),
+                record_losses=data.get('record_losses', 0),
+                record_ties=data.get('record_ties', 0),
+                record_summary=data.get('record_summary', ''),
+                record_comment=data.get('record_comment'),
+                win_percent=data.get('win_percent', 0.0),
+                division_id=data.get('division_id'),
+                conference_id=data.get('conference_id'),
+                division_name=data.get('division_name'),
+            )
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to convert dict to team: {exc}")
+            return None
+
+    def _game_to_dict(self, game: NFLGame) -> dict:
+        """Convert NFLGame dataclass to dict for caching."""
+        return {
+            'game_id': game.game_id,
+            'date': game.date.isoformat() if game.date else None,
+            'home_team': self._team_to_dict(game.home_team),
+            'away_team': self._team_to_dict(game.away_team),
+            'home_score': game.home_score,
+            'away_score': game.away_score,
+            'status_state': game.status_state,
+            'status_detail': game.status_detail,
+            'quarter': game.quarter,
+            'time_remaining': game.time_remaining,
+            'is_final': game.is_final,
+            'is_live': game.is_live,
+            'venue': game.venue,
+        }
+
+    def _dict_to_game(self, data: dict) -> Optional[NFLGame]:
+        """Convert dict to NFLGame dataclass from cache."""
+        try:
+            home_team = self._dict_to_team(data['home_team'])
+            away_team = self._dict_to_team(data['away_team'])
+
+            if not home_team or not away_team:
+                return None
+
+            return NFLGame(
+                game_id=data['game_id'],
+                date=datetime.fromisoformat(data['date']) if data.get('date') else None,
+                home_team=home_team,
+                away_team=away_team,
+                home_score=data.get('home_score', 0),
+                away_score=data.get('away_score', 0),
+                status_state=data.get('status_state', 'pre'),
+                status_detail=data.get('status_detail', 'Scheduled'),
+                quarter=data.get('quarter'),
+                time_remaining=data.get('time_remaining'),
+                is_final=data.get('is_final', False),
+                is_live=data.get('is_live', False),
+                venue=data.get('venue'),
+            )
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to convert dict to game: {exc}")
+            return None
 
 
 class NFLDataSnapshot:

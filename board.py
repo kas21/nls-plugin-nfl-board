@@ -35,6 +35,9 @@ class NFLBoardConfig:
         self.display_seconds = int(config_data.get("display_seconds", 8))
         self.refresh_seconds = int(config_data.get("refresh_seconds", 300))
 
+        # Cache configuration - default to same as refresh_seconds
+        self.cache_expiration_seconds = int(config_data.get("cache_expiration_seconds", self.refresh_seconds))
+
         # Game display configuration
         self.show_all_games = bool(config_data.get("show_all_games", False))
         self.show_previous_games_until_time = self._parse_cutoff_time(
@@ -44,6 +47,7 @@ class NFLBoardConfig:
         debug.info(f"NFL Board: Configured for teams {self.team_ids}")
         debug.info(f"NFL Board: Show all games = {self.show_all_games}")
         debug.info(f"NFL Board: Previous games cutoff = {self.show_previous_games_until_time}")
+        debug.info(f"NFL Board: Cache expiration = {self.cache_expiration_seconds} seconds")
 
     def _parse_team_ids(self, team_ids_config) -> List[str]:
         """Parse team IDs from configuration, handling single string or list."""
@@ -116,8 +120,8 @@ class NFLBoard(BoardBase):
             debug.error(f"NFL Board configuration error: {error}")
             raise
 
-        # Initialize API client
-        self.api_client = NFLApiClient()
+        # Initialize API client with cache expiration from config
+        self.api_client = NFLApiClient(cache_expiration_seconds=self.config.cache_expiration_seconds)
 
         # Initialize logo manager
         logo_cache_dir = (
