@@ -10,6 +10,11 @@
       "id": "nfl_board",
       "class_name": "NFLBoard",
       "module": "board"
+    },
+    {
+      "id": "nfl_standings",
+      "class_name": "NFLStandingsBoard",
+      "module": "nfl_standings_board"
     }
   ],
 
