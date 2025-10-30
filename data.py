@@ -4,10 +4,11 @@ Handles API calls and data processing using APScheduler for background refresh.
 """
 
 import logging
-import requests
-from datetime import datetime, timedelta
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+import httpx
 
 debug = logging.getLogger("scoreboard")
 
@@ -65,6 +66,11 @@ class NFLTeam:
     record_ties: int = 0
     record_summary: str = ""
     record_comment: Optional[str] = "---"
+    win_percent: float = 0.0
+    # Division/Conference info from groups API
+    division_id: Optional[str] = None
+    conference_id: Optional[str] = None
+    division_name: Optional[str] = None  # Extracted from standingSummary
 
     @property
     def has_detailed_record(self) -> bool:
@@ -131,6 +137,9 @@ class NFLApiClient:
     """
     Handles all NFL API communication with ESPN endpoints.
     Provides clean methods for different data needs.
+
+    Division/conference mappings are now dynamically built from API data
+    and stored in NFLDataSnapshot.get_teams_by_division() method.
     """
 
     def __init__(self):
@@ -149,7 +158,7 @@ class NFLApiClient:
         debug.debug(f"NFL Board: Fetching scoreboard for {date_string}")
 
         try:
-            response = requests.get(url, timeout=10)
+            response = httpx.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
 
@@ -184,9 +193,9 @@ class NFLApiClient:
 
         try:
             url = f"{self.base_url}/teams"
-            debug.info(f"NFL Board: Fetching basic teams data")
+            debug.info("NFL Board: Fetching basic teams data")
 
-            response = requests.get(url, timeout=10)
+            response = httpx.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
 
@@ -222,7 +231,7 @@ class NFLApiClient:
             url = f"{self.base_url}/teams/{team_id}/schedule"
             debug.debug(f"NFL Board: Fetching schedule for team {team_id}")
 
-            response = requests.get(url, timeout=10)
+            response = httpx.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
 
@@ -294,9 +303,10 @@ class NFLApiClient:
 
             # Extract team record
             wins = losses = ties = 0
+            win_percent = 0.0
             record_summary = ""
             # The record object has a list of record types
-            # The first item in the list should be the TOTAL record 
+            # The first item in the list should be the TOTAL record
             record_items = team_data.get("record", {}).get("items", [])
             #debug.info(record_items)
             if record_items:
@@ -315,10 +325,30 @@ class NFLApiClient:
                         losses = int(stat.get("value", 0))
                     elif stat_name == "ties":
                         ties = int(stat.get("value", 0))
+                    elif stat_name == "winPercent":
+                        win_percent = float(stat.get("value", 0.0))
                 #debug.info(f"RECORD!!! {wins}-{losses}-{ties}")
 
             # Extract standing summary for record_comment
             record_comment = team_data.get("standingSummary")
+
+            # Extract division/conference info from groups
+            division_id = None
+            conference_id = None
+            division_name = None
+
+            groups = team_data.get("groups", {})
+            if groups:
+                division_id = groups.get("id")
+                parent = groups.get("parent", {})
+                conference_id = parent.get("id")
+
+            # Parse division name from standingSummary (e.g., "2nd in NFC East")
+            if record_comment:
+                import re
+                match = re.search(r'in (.+)$', record_comment)
+                if match:
+                    division_name = match.group(1)
 
             # Convert colors to RGB tuples (old implementation expected tuples)
             color_primary = self._hex_to_rgb(team_data.get("color", "000000"))
@@ -337,7 +367,11 @@ class NFLApiClient:
                 record_losses=losses,
                 record_ties=ties,
                 record_summary=record_summary,
-                record_comment=record_comment
+                record_comment=record_comment,
+                win_percent=win_percent,
+                division_id=division_id,
+                conference_id=conference_id,
+                division_name=division_name
             )
 
         except Exception as exc:
@@ -472,7 +506,7 @@ class NFLApiClient:
             url = f"{self.base_url}/teams/{team_id}"
             debug.debug(f"NFL Board: Fetching detailed data for team {team_id}")
 
-            response = requests.get(url, timeout=10)
+            response = httpx.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
 
@@ -538,3 +572,75 @@ class NFLDataSnapshot:
 
         # Team schedules for favorite teams
         self.team_schedules: Dict[str, List[NFLGame]] = {}
+
+        # Dynamic division/conference mappings (built from API data)
+        self._division_map: Optional[Dict[str, List[str]]] = None
+        self._conference_map: Optional[Dict[str, List[str]]] = None
+
+    def get_teams_by_division(self, division_name: str) -> List[NFLTeam]:
+        """
+        Get all teams in a division, dynamically built from team data.
+
+        Args:
+            division_name: Division name like "AFC East", "NFC North"
+
+        Returns:
+            List of NFLTeam objects in that division, sorted by record
+        """
+        teams = [
+            team for team in self.all_teams.values()
+            if team.division_name == division_name
+        ]
+
+        # Sort by record (wins desc, losses asc, ties asc)
+        return sorted(teams, key=lambda t: (-t.record_wins, t.record_losses, t.record_ties))
+
+    def get_teams_by_conference(self, conference: str) -> List[NFLTeam]:
+        """
+        Get all teams in a conference (AFC or NFC).
+
+        Args:
+            conference: "AFC" or "NFC"
+
+        Returns:
+            List of NFLTeam objects in that conference, sorted by record
+        """
+        teams = [
+            team for team in self.all_teams.values()
+            if team.division_name and team.division_name.startswith(conference)
+        ]
+
+        # Sort by record
+        return sorted(teams, key=lambda t: (-t.record_wins, t.record_losses, t.record_ties))
+
+    def get_all_divisions(self) -> List[str]:
+        """
+        Get list of all division names found in the data.
+
+        Returns:
+            List of division names like ["AFC East", "AFC North", ...]
+        """
+        divisions = set()
+        for team in self.all_teams.values():
+            if team.division_name:
+                divisions.add(team.division_name)
+
+        # Sort: AFC divisions first, then NFC
+        return sorted(divisions, key=lambda d: (not d.startswith('AFC'), d))
+
+    def get_all_conferences(self) -> List[str]:
+        """
+        Get list of all conferences found in the data.
+
+        Returns:
+            List of conference names ["AFC", "NFC"]
+        """
+        conferences = set()
+        for team in self.all_teams.values():
+            if team.division_name:
+                if team.division_name.startswith('AFC'):
+                    conferences.add('AFC')
+                elif team.division_name.startswith('NFC'):
+                    conferences.add('NFC')
+
+        return sorted(conferences)
