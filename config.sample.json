@@ -4,5 +4,9 @@
     "refresh_seconds": 180,
     "show_all_games": true,
     "show_previous_games_until": "09:00",
-    "enabled": true
+    "enabled": true,
+    "division": "NFC East",
+    "display_type": "division",
+    "scroll_speed": 0.2,
+    "use_large_font": true
 }
