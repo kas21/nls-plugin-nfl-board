@@ -2,9 +2,8 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from PIL import Image, ImageDraw
-
 from boards.base_board import BoardBase
+from PIL import Image, ImageDraw
 from utils import get_file
 
 from . import __board_name__, __description__, __version__
@@ -247,9 +246,6 @@ class NFLStandingsBoard(BoardBase):
         image = Image.new("RGB", (image_width, image_height), (0, 0, 0))
         draw = ImageDraw.Draw(image)
 
-        # Draw title on left side
-        draw.text((1, 0), title, font=self.font, fill=(200, 200, 200))
-
         # Try to add NFL logo and gradient on the right side
         try:
             # Load gradient
@@ -292,6 +288,9 @@ class NFLStandingsBoard(BoardBase):
         # Draw standings with colored team backgrounds (like NHL)
         draw = ImageDraw.Draw(image)  # Recreate draw object after image conversions
         row_pos = row_height
+
+        # Draw title on left side
+        draw.text((1, 0), title, font=self.font, fill=(200, 200, 200))
 
         for team in standings:
             # Draw colored rectangle background for team abbreviation
