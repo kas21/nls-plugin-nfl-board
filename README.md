@@ -33,7 +33,7 @@ Use the NHL Led Scoreboard's plugin manager python script to install:
 
 or
 
-`python plugins.py add https://github.com/kas21/nls-plugin-nfl-board.git --ref latest`
+`python plugins.py add https://github.com/kas21/nls-plugin-nfl-board.git`
 
 After the plugin is installed, add `nfl_board` to your NHL-LED-Scoreboard's main configuration:
 
