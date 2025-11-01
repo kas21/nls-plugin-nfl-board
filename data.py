@@ -5,7 +5,7 @@ Handles API calls and data processing using APScheduler for background refresh.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -148,8 +148,32 @@ class NFLApiClient:
         self.base_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
         self.teams_cache: Dict[str, NFLTeam] = {}
         self.last_teams_fetch: Optional[datetime] = None
+
+        # Different cache expiration times for different data types
+        # These can be overridden by config, but we use smart defaults
         self.cache_expiration_seconds = cache_expiration_seconds
-        debug.info(f"NFL API Client: Initialized with cache expiration of {cache_expiration_seconds} seconds")
+
+        # Team data (logos, colors, names) - rarely changes
+        self.cache_teams_seconds = 86400  # 24 hours
+
+        # Team schedules - changes weekly during season
+        self.cache_schedule_seconds = 43200  # 12 hours
+
+        # Team standings/records - updates after games
+        self.cache_standings_seconds = 14400  # 4 hours
+
+        # Scoreboard data - depends on game state (calculated dynamically)
+        self.cache_live_game_seconds = 60  # 1 minute for live games
+        self.cache_completed_game_seconds = 43200  # 12 hours for completed games
+        self.cache_upcoming_game_seconds = 3600  # 1 hour for upcoming games
+
+        debug.info(f"NFL API Client: Initialized with cache expiration times:")
+        debug.info(f"  Teams: {self.cache_teams_seconds}s (24h)")
+        debug.info(f"  Schedules: {self.cache_schedule_seconds}s (12h)")
+        debug.info(f"  Standings: {self.cache_standings_seconds}s (4h)")
+        debug.info(f"  Live games: {self.cache_live_game_seconds}s (1m)")
+        debug.info(f"  Completed games: {self.cache_completed_game_seconds}s (12h)")
+        debug.info(f"  Upcoming games: {self.cache_upcoming_game_seconds}s (1h)")
 
     def get_scoreboard_for_date(self, date: datetime) -> List[NFLGame]:
         """
@@ -165,7 +189,7 @@ class NFLApiClient:
         # Try to get from cache first (even if expired)
         cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
         if cached_data is not None:
-            debug.debug(f"NFL Board: Using cached scoreboard data for {date_string} (may be stale)")
+            debug.debug(f"NFL Board: Using cached scoreboard data for {date_string}")
             # Parse cached data back into game objects
             games = []
             for game_dict in cached_data:
@@ -205,10 +229,44 @@ class NFLApiClient:
 
             debug.debug(f"NFL Board: Found {len(games)} games for {date_string}")
 
+            # Determine cache expiration based on game states
+            # Priority order (shortest expiration wins):
+            # 1. Any games live → 1 minute (need frequent updates)
+            # 2. Any games starting within 2 hours → 1 minute (catch when they go live)
+            # 3. All games completed → 12 hours (scores won't change)
+            # 4. All games far in future → 1 hour (times are stable)
+
+            has_live = any(game.is_live for game in games)
+            all_completed = all(game.is_final for game in games) if games else False
+
+            # Check if any games are starting soon (within 2 hours)
+            now = datetime.now(timezone.utc)
+            has_starting_soon = False
+            for game in games:
+                if game.date and not game.is_final:
+                    time_until_game = (game.date - now).total_seconds()
+                    # Game starts within 2 hours (7200 seconds)
+                    if 0 <= time_until_game <= 7200:
+                        has_starting_soon = True
+                        break
+
+            if has_live:
+                cache_expire = self.cache_live_game_seconds
+                expire_desc = "live games"
+            elif has_starting_soon:
+                cache_expire = self.cache_live_game_seconds
+                expire_desc = "games starting soon"
+            elif all_completed:
+                cache_expire = self.cache_completed_game_seconds
+                expire_desc = "all completed"
+            else:
+                cache_expire = self.cache_upcoming_game_seconds
+                expire_desc = "upcoming games"
+
             # Cache the results as dicts
             games_as_dicts = [self._game_to_dict(game) for game in games]
-            sb_cache.set(cache_key, games_as_dicts, expire=self.cache_expiration_seconds)
-            debug.debug(f"NFL Board: Cached scoreboard for {date_string} ({self.cache_expiration_seconds}s expiration)")
+            sb_cache.set(cache_key, games_as_dicts, expire=cache_expire, read=False)
+            debug.debug(f"NFL Board: Cached scoreboard for {date_string} ({cache_expire}s expiration - {expire_desc})")
 
             return games
 
@@ -237,7 +295,7 @@ class NFLApiClient:
         # Try to get from disk cache first (even if expired)
         cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
         if cached_data is not None:
-            debug.debug("NFL Board: Using cached teams data (may be stale)")
+            debug.debug("NFL Board: Using cached teams data")
             teams = {}
             for team_id, team_dict in cached_data.items():
                 team = self._dict_to_team(team_dict)
@@ -282,8 +340,8 @@ class NFLApiClient:
 
             # Cache the teams as dicts
             teams_as_dicts = {team_id: self._team_to_dict(team) for team_id, team in teams.items()}
-            sb_cache.set(cache_key, teams_as_dicts, expire=self.cache_expiration_seconds)
-            debug.info(f"NFL Board: Cached {len(teams)} basic teams ({self.cache_expiration_seconds}s expiration)")
+            sb_cache.set(cache_key, teams_as_dicts, expire=self.cache_teams_seconds, read=False)
+            debug.info(f"NFL Board: Cached {len(teams)} basic teams ({self.cache_teams_seconds}s / 24h expiration)")
 
             return teams
 
@@ -308,7 +366,7 @@ class NFLApiClient:
         # Try to get from cache first (even if expired)
         cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
         if cached_data is not None:
-            debug.debug(f"NFL Board: Using cached schedule data for team {team_id} (may be stale)")
+            debug.debug(f"NFL Board: Using cached schedule data for team {team_id}")
             games = []
             for game_dict in cached_data:
                 game = self._dict_to_game(game_dict)
@@ -346,8 +404,8 @@ class NFLApiClient:
 
             # Cache the schedule as dicts
             games_as_dicts = [self._game_to_dict(game) for game in games]
-            sb_cache.set(cache_key, games_as_dicts, expire=self.cache_expiration_seconds)
-            debug.debug(f"NFL Board: Cached schedule for team {team_id} ({self.cache_expiration_seconds}s expiration)")
+            sb_cache.set(cache_key, games_as_dicts, expire=self.cache_schedule_seconds, read=False)
+            debug.debug(f"NFL Board: Cached schedule for team {team_id} ({self.cache_schedule_seconds}s / 12h expiration)")
 
             return games
 
@@ -619,7 +677,7 @@ class NFLApiClient:
         # Try to get from cache first (even if expired)
         cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
         if cached_data is not None:
-            debug.debug(f"NFL Board: Using cached detailed data for team {team_id} (may be stale)")
+            debug.debug(f"NFL Board: Using cached detailed data for team {team_id}")
             detailed_team = self._dict_to_team(cached_data)
             if detailed_team and team_id in self.teams_cache:
                 self.teams_cache[team_id] = detailed_team
@@ -648,10 +706,10 @@ class NFLApiClient:
                 # Update the cached team with detailed information
                 self.teams_cache[team_id] = detailed_team
 
-                # Cache the detailed team data
+                # Cache the detailed team data (standings/records)
                 team_dict = self._team_to_dict(detailed_team)
-                sb_cache.set(cache_key, team_dict, expire=self.cache_expiration_seconds)
-                debug.debug(f"NFL Board: Updated and cached team {team_id} with detailed record data")
+                sb_cache.set(cache_key, team_dict, expire=self.cache_standings_seconds, read=False)
+                debug.debug(f"NFL Board: Updated and cached team {team_id} with detailed record data ({self.cache_standings_seconds}s / 4h expiration)")
                 return True
             else:
                 debug.warning(f"NFL Board: Failed to get detailed data for team {team_id}")

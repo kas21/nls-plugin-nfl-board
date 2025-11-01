@@ -9,9 +9,8 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PIL import Image
-
 from boards.base_board import BoardBase
+from PIL import Image
 from utils import get_file
 
 from . import __board_name__, __description__, __version__
@@ -146,12 +145,19 @@ class NFLBoard(BoardBase):
         # Set up scheduled data refresh using APScheduler
         self._scheduled_job_id = f"nfl_board_data_refresh_{id(self)}"
 
-        # Perform initial data refresh
+        # Try to load snapshot from cache first (stale-while-revalidate pattern)
+        # This ensures fast startup by using cached data even if expired
         existing_snapshot = getattr(self.data, "nfl_board_snapshot", None)
         if existing_snapshot is None:
-            self._perform_data_refresh()
+            debug.info("NFL Board: No snapshot exists, attempting to load from cache")
+            if not self._load_snapshot_from_cache():
+                debug.info("NFL Board: No cache available, performing full API refresh")
+                self._perform_data_refresh()
+            else:
+                debug.info("NFL Board: Successfully loaded snapshot from cache")
 
-        # Schedule recurring data refresh
+        # Schedule recurring data refresh in background
+        # This will refresh stale cache data automatically
         self._setup_data_refresh_schedule()
 
         debug.info("NFL Board: Initialization complete")
@@ -221,6 +227,176 @@ class NFLBoard(BoardBase):
             debug.info(f"NFL Board: Scheduled data refresh every {self.config.refresh_seconds} seconds")
         else:
             debug.info("NFL Board: Data refresh job already scheduled")
+
+    def _load_snapshot_from_cache(self) -> bool:
+        """
+        Try to load a snapshot from cache only (no API calls).
+        Returns True if cache was available and snapshot was created.
+        Returns False if no cache exists (board should then perform full refresh).
+
+        This uses the stale-while-revalidate cache pattern - it will return
+        cached data even if expired, allowing for fast startup.
+        """
+        from utils import sb_cache
+
+        debug.debug("NFL Board: Attempting to load snapshot from cache")
+
+        # Check if we have any cached data at all
+        today = datetime.now()
+        yesterday = today - timedelta(days=1)
+
+        # Try to get cached teams data (most critical)
+        teams_cache_key = "nfl_all_teams"
+        cached_teams_data = sb_cache.get(teams_cache_key, default=None, expire_time=False)
+
+        if not cached_teams_data:
+            debug.debug("NFL Board: No cached teams data available")
+            return False
+
+        debug.debug("NFL Board: Found cached teams data, building snapshot from cache")
+
+        try:
+            # Create snapshot from cache
+            snapshot = NFLDataSnapshot()
+
+            # Parse teams from cache
+            all_teams = {}
+            for team_id, team_dict in cached_teams_data.items():
+                team = self._dict_to_team(team_dict)
+                if team:
+                    all_teams[team_id] = team
+
+            if not all_teams:
+                debug.warning("NFL Board: Cached teams data was empty or invalid")
+                return False
+
+            snapshot.all_teams = all_teams
+
+            # Get favorite teams subset
+            snapshot.favorite_teams = {
+                team_id: team for team_id, team in all_teams.items()
+                if team_id in self.config.team_ids
+            }
+
+            # Try to load today's games from cache
+            today_cache_key = f"nfl_scoreboard_{today.strftime('%Y%m%d')}"
+            cached_today_games = sb_cache.get(today_cache_key, default=None, expire_time=False)
+            if cached_today_games:
+                debug.debug("NFL Board: Found cached today's games")
+                snapshot.todays_games = [
+                    self._dict_to_game(game_dict)
+                    for game_dict in cached_today_games
+                    if self._dict_to_game(game_dict)
+                ]
+
+            # Try to load yesterday's games from cache
+            yesterday_cache_key = f"nfl_scoreboard_{yesterday.strftime('%Y%m%d')}"
+            cached_yesterday_games = sb_cache.get(yesterday_cache_key, default=None, expire_time=False)
+            if cached_yesterday_games:
+                debug.debug("NFL Board: Found cached yesterday's games")
+                snapshot.yesterdays_games = [
+                    self._dict_to_game(game_dict)
+                    for game_dict in cached_yesterday_games
+                    if self._dict_to_game(game_dict)
+                ]
+
+            # Identify live games
+            snapshot.live_games = [game for game in snapshot.todays_games if game.is_live]
+
+            # Get favorite team games
+            all_recent_games = snapshot.todays_games + snapshot.yesterdays_games
+            snapshot.favorite_team_games = [
+                game for game in all_recent_games
+                if any(game.involves_team(team_id) for team_id in self.config.team_ids)
+            ]
+
+            # Try to load team schedules from cache
+            for team_id in self.config.team_ids:
+                schedule_cache_key = f"nfl_schedule_{team_id}"
+                cached_schedule = sb_cache.get(schedule_cache_key, default=None, expire_time=False)
+                if cached_schedule:
+                    debug.debug(f"NFL Board: Found cached schedule for team {team_id}")
+                    snapshot.team_schedules[team_id] = [
+                        self._dict_to_game(game_dict)
+                        for game_dict in cached_schedule
+                        if self._dict_to_game(game_dict)
+                    ]
+
+            # Store the snapshot
+            self.data.nfl_board_snapshot = snapshot
+
+            debug.info(
+                f"NFL Board: Loaded snapshot from cache - {len(snapshot.todays_games)} today, "
+                f"{len(snapshot.yesterdays_games)} yesterday, "
+                f"{len(snapshot.favorite_team_games)} favorite team games"
+            )
+
+            return True
+
+        except Exception as error:
+            debug.error(f"NFL Board: Failed to build snapshot from cache: {error}")
+            return False
+
+    def _dict_to_team(self, team_dict: dict) -> Optional[NFLTeam]:
+        """Convert a dictionary back to an NFLTeam object."""
+        try:
+            return NFLTeam(
+                team_id=team_dict['team_id'],
+                name=team_dict['name'],
+                abbreviation=team_dict['abbreviation'],
+                display_name=team_dict['display_name'],
+                location=team_dict['location'],
+                color_primary=tuple(team_dict['color_primary']),
+                color_secondary=tuple(team_dict['color_secondary']),
+                logo_url=team_dict.get('logo_url'),
+                record_wins=team_dict.get('record_wins', 0),
+                record_losses=team_dict.get('record_losses', 0),
+                record_ties=team_dict.get('record_ties', 0),
+                record_summary=team_dict.get('record_summary', ''),
+                record_comment=team_dict.get('record_comment'),
+                win_percent=team_dict.get('win_percent', 0.0),
+                division_id=team_dict.get('division_id'),
+                conference_id=team_dict.get('conference_id'),
+                division_name=team_dict.get('division_name'),
+            )
+        except (KeyError, TypeError) as error:
+            debug.error(f"NFL Board: Failed to parse team from dict: {error}")
+            return None
+
+    def _dict_to_game(self, game_dict: dict) -> Optional[NFLGame]:
+        """Convert a dictionary back to an NFLGame object."""
+        try:
+            # Parse teams first
+            away_team = self._dict_to_team(game_dict['away_team'])
+            home_team = self._dict_to_team(game_dict['home_team'])
+
+            if not away_team or not home_team:
+                return None
+
+            # Parse datetime
+            game_date = None
+            if game_dict.get('date'):
+                from .data import parse_espn_datetime
+                game_date = parse_espn_datetime(game_dict['date'])
+
+            return NFLGame(
+                game_id=game_dict['game_id'],
+                date=game_date,
+                home_team=home_team,
+                away_team=away_team,
+                home_score=game_dict.get('home_score', 0),
+                away_score=game_dict.get('away_score', 0),
+                status_state=game_dict.get('status_state', 'pre'),
+                status_detail=game_dict.get('status_detail', 'Scheduled'),
+                quarter=game_dict.get('quarter'),
+                time_remaining=game_dict.get('time_remaining'),
+                is_final=game_dict.get('is_final', False),
+                is_live=game_dict.get('is_live', False),
+                venue=game_dict.get('venue'),
+            )
+        except (KeyError, TypeError) as error:
+            debug.error(f"NFL Board: Failed to parse game from dict: {error}")
+            return None
 
     def _perform_data_refresh(self):
         """

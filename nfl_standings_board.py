@@ -240,6 +240,8 @@ class NFLStandingsBoard(BoardBase):
         # Calculate image height
         num_lines = len(standings)
         image_height = row_height + (num_lines * row_height)  # header + teams
+        if image_height < self.matrix.height:
+            image_height = self.matrix.height  # Ensure at least matrix height
         image_width = self.matrix.width
 
         # Create base image (RGB for final output)
