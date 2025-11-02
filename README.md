@@ -14,6 +14,7 @@ A NFL scoreboard plugin for the [NHL LED Scoreboard](https://github.com/falkyre/
 - [Display Modes](#display-modes)
 - [Layouts](#layouts)
 - [Logo Customization](#logo-customization)
+- [Caching System](#caching-system)
 - [Screenshots](#screenshots)
 
 ## Features
@@ -58,6 +59,8 @@ For example, to add both boards to the off day rotation:
 }
 ```
 
+**Important:** The `nfl_standings` board **requires** the `nfl_board` to be enabled. The main NFL board handles all data loading, caching, and scheduled refreshes. The standings board reads from the shared data snapshot created by the main board. You cannot use `nfl_standings` alone.
+
 **Note:** You must restart the scoreboard for changes to take effect.
 
 ## Configuration
@@ -100,10 +103,10 @@ nano config.json
 | `show_previous_games_until` | String | "06:00" | Time (HH:MM) until which to show previous day's games |
 | `enabled` | Boolean | true | Enable/disable the board (currently not functional) |
 
-**Note:** Cache expiration times are intelligently set based on data type:
+**Note:** Cache expiration times are set based on data type:
 
 - **Team data** (logos, colors, names): 24 hours - rarely changes
-- **Schedules**: 12 hours - changes weekly during season
+- **Schedules**: 12 hours - rarely changes but just in case
 - **Standings/Records**: 4 hours - updates after games
 - **Scoreboard data** (dynamic based on game state):
   - Live games: 1 minute - needs frequent updates
@@ -112,6 +115,8 @@ nano config.json
   - All games far in future: 1 hour - game times stable
 
 ### NFL Standings Board Configuration Options
+
+**Dependency:** This board requires `nfl_board` to be enabled. It reads data from the shared snapshot created by the main NFL board.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -137,24 +142,11 @@ Team IDs correspond to ESPN's NFL team identifiers. Common team IDs include:
 
 The board intelligently displays different content based on game status:
 
-### Live Games
+### Live/Upcoming/Completed Games
 
-- Team logos and abbreviations
-- Current score
-- Quarter and time remaining
-
-### Upcoming Games
-
-- Team logos and abbreviations
-- Team records
-- Game date and time
-- "VS" indicator
-
-### Completed Games
-
-- Team logos and abbreviations
-- Final score
-- "FINAL" status
+- Team logos VS'
+- Quarter and time remaining or Game date and time
+- Score or Team Record
 
 ### Team Summary (when no games scheduled)
 
@@ -174,10 +166,10 @@ The standings board displays current NFL standings with the following features:
 - **Smart Text Colors**: Team abbreviations use secondary team colors with WCAG-compliant contrast checking
 - **Win Percentage**: Displays win percentage alongside team records
 - **Automatic Scrolling**: Scrolls smoothly when standings exceed display height
-- **NFL Logo Overlay**: Features the NFL logo in the header with a gradient background
-- **Dynamic Data**: Divisions and conferences are dynamically retrieved from the ESPN API
 
 Standings are sorted by wins (descending), losses (ascending), and ties.
+
+**Note:** This board requires the main `nfl_board` to be enabled, as it depends on the shared data snapshot for team information and records.
 
 ## Layouts
 
@@ -236,6 +228,53 @@ Team logo positioning and sizing can be customized in `logo_offsets.json`. The p
 - **`offset`**: `[x, y]` pixel offset for fine-tuning logo position
 
 Logos are automatically downloaded from ESPN and cached in the `assets/logos/nfl/` directory.
+
+## Caching System
+
+The NFL Board uses an intelligent multi-tier caching system for optimal performance and data freshness.
+
+### Cache Benefits
+
+- **Fast Startup**: Loads from cache in < 1 second (vs 5-10 seconds from API)
+- **Resilient**: Serves stale data if API is unavailable
+- **Efficient**: Reduces API calls by 90%+ during normal operation
+- **Smart Expiration**: Different data types have appropriate cache lifetimes
+
+### Cache Structure
+
+The board caches data in `/tmp/sb_cache/` with intelligent expiration times:
+
+| Cache Key | Data | Expiration | Rationale |
+|-----------|------|------------|-----------|
+| `nfl_all_teams` | Basic team info (32 teams) | 24 hours | Rarely changes |
+| `nfl_team_details_{id}` | Team records/standings | 4 hours | Updates after games |
+| `nfl_scoreboard_{date}` | Games for specific date | Dynamic | See below |
+| `nfl_schedule_{id}` | Team schedule | 12 hours | Changes weekly |
+
+### Dynamic Scoreboard Caching
+
+Scoreboard cache expires based on game state:
+
+- **Live games**: 1 minute (frequent score updates)
+- **Games starting within 2 hours**: 1 minute (catch when they go live)
+- **All games completed**: 12 hours (final scores stable)
+- **All games far in future**: 1 hour (times stable)
+
+### Cache Utilities
+
+**Inspect cache contents:**
+
+```bash
+uv run scripts/check_cache.py
+```
+
+**Clear cache:**
+
+```bash
+rm -rf /tmp/sb_cache
+```
+
+**Detailed documentation:** See [docs/CACHING.md](docs/CACHING.md) for complete cache architecture, data structures, and troubleshooting.
 
 ## Screenshots
 
