@@ -272,7 +272,23 @@ class NFLBoard(BoardBase):
 
             snapshot.all_teams = all_teams
 
-            # Get favorite teams subset
+            # Try to load detailed team records from cache
+            # Team details are cached separately with records, standings, etc.
+            debug.debug("NFL Board: Loading detailed team records from cache")
+            detailed_loaded = 0
+            for team_id in all_teams.keys():
+                detail_cache_key = f"nfl_team_details_{team_id}"
+                cached_team_details = sb_cache.get(detail_cache_key, default=None, expire_time=False)
+                if cached_team_details:
+                    detailed_team = self._dict_to_team(cached_team_details)
+                    if detailed_team:
+                        # Replace the basic team with the detailed one
+                        all_teams[team_id] = detailed_team
+                        detailed_loaded += 1
+
+            debug.debug(f"NFL Board: Loaded detailed records for {detailed_loaded}/{len(all_teams)} teams from cache")
+
+            # Get favorite teams subset (now with detailed records if available)
             snapshot.favorite_teams = {
                 team_id: team for team_id, team in all_teams.items()
                 if team_id in self.config.team_ids
