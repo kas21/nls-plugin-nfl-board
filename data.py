@@ -186,29 +186,19 @@ class NFLApiClient:
         date_string = date.strftime("%Y%m%d")
         cache_key = f"nfl_scoreboard_{date_string}"
 
-        # Try to get from cache first (even if expired)
-        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        # Try to get from cache first
+        # Note: diskcache automatically evicts expired entries, so we only get valid cache
+        cached_data = sb_cache.get(cache_key, default=None)
         if cached_data is not None:
             debug.debug(f"NFL Board: Using cached scoreboard data for {date_string}")
             # Parse cached data back into game objects
             games = []
             for game_dict in cached_data:
-                # Reconstruct game from cached dict
                 game = self._dict_to_game(game_dict)
                 if game:
                     games.append(game)
 
-            # Check if cache is still valid
-            cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
-            if cached_with_expiry is not None and cached_with_expiry[0] is not None:
-                # Cache is still valid, return immediately
-                debug.debug(f"NFL Board: Cache is valid for {date_string}")
-                return games
-            else:
-                # Cache is expired but we'll use it anyway and refresh in background
-                debug.debug(f"NFL Board: Cache expired for {date_string}, will refresh")
-                # We'll still try to fetch fresh data below, but return stale data if fetch fails
-                stale_games = games
+            return games
 
         url = f"{self.base_url}/scoreboard?dates={date_string}"
 
@@ -226,6 +216,9 @@ class NFLApiClient:
                 game = self._parse_game_from_event(event)
                 if game:
                     games.append(game)
+
+            # Sort games by start time
+            games.sort(key=lambda g: g.date or datetime.min.replace(tzinfo=timezone.utc))
 
             debug.debug(f"NFL Board: Found {len(games)} games for {date_string}")
 
@@ -272,10 +265,6 @@ class NFLApiClient:
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch scoreboard for {date_string}: {exc}")
-            # Return stale data if we have it
-            if 'stale_games' in locals():
-                debug.info(f"NFL Board: Using stale cache data due to API failure")
-                return stale_games
             return []
 
     def get_current_scoreboard(self) -> List[NFLGame]:
@@ -292,8 +281,9 @@ class NFLApiClient:
         """
         cache_key = "nfl_all_teams"
 
-        # Try to get from disk cache first (even if expired)
-        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        # Try to get from cache first
+        # Note: diskcache automatically evicts expired entries
+        cached_data = sb_cache.get(cache_key, default=None)
         if cached_data is not None:
             debug.debug("NFL Board: Using cached teams data")
             teams = {}
@@ -301,18 +291,10 @@ class NFLApiClient:
                 team = self._dict_to_team(team_dict)
                 if team:
                     teams[team_id] = team
-            self.teams_cache = teams
 
-            # Check if cache is still valid
-            cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
-            if cached_with_expiry is not None and cached_with_expiry[0] is not None:
-                # Cache is still valid, return immediately
-                debug.debug("NFL Board: Cache is valid for teams")
-                return teams
-            else:
-                # Cache is expired but we'll use it anyway and refresh in background
-                debug.debug("NFL Board: Cache expired for teams, will refresh")
-                stale_teams = teams
+            self.teams_cache = teams
+            self.last_teams_fetch = datetime.now()
+            return teams
 
         try:
             url = f"{self.base_url}/teams"
@@ -347,10 +329,6 @@ class NFLApiClient:
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch teams: {exc}")
-            # Return stale data if we have it
-            if 'stale_teams' in locals():
-                debug.info("NFL Board: Using stale cache data due to API failure")
-                return stale_teams
             return self.teams_cache if self.teams_cache else {}
 
     def get_team_schedule(self, team_id: str) -> List[NFLGame]:
@@ -363,8 +341,9 @@ class NFLApiClient:
         """
         cache_key = f"nfl_schedule_{team_id}"
 
-        # Try to get from cache first (even if expired)
-        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        # Try to get from cache first
+        # Note: diskcache automatically evicts expired entries
+        cached_data = sb_cache.get(cache_key, default=None)
         if cached_data is not None:
             debug.debug(f"NFL Board: Using cached schedule data for team {team_id}")
             games = []
@@ -373,16 +352,7 @@ class NFLApiClient:
                 if game:
                     games.append(game)
 
-            # Check if cache is still valid
-            cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
-            if cached_with_expiry is not None and cached_with_expiry[0] is not None:
-                # Cache is still valid, return immediately
-                debug.debug(f"NFL Board: Cache is valid for team {team_id} schedule")
-                return games
-            else:
-                # Cache is expired but we'll use it anyway and refresh in background
-                debug.debug(f"NFL Board: Cache expired for team {team_id} schedule, will refresh")
-                stale_games = games
+            return games
 
         try:
             url = f"{self.base_url}/teams/{team_id}/schedule"
@@ -400,6 +370,9 @@ class NFLApiClient:
                 if game:
                     games.append(game)
 
+            # Sort games by start time
+            games.sort(key=lambda g: g.date or datetime.min.replace(tzinfo=timezone.utc))
+
             debug.debug(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
 
             # Cache the schedule as dicts
@@ -411,10 +384,6 @@ class NFLApiClient:
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch schedule for team {team_id}: {exc}")
-            # Return stale data if we have it
-            if 'stale_games' in locals():
-                debug.info(f"NFL Board: Using stale cache data due to API failure")
-                return stale_games
             return []
 
     def _parse_basic_team_data(self, team_data: Dict[str, Any]) -> Optional[NFLTeam]:
@@ -674,24 +643,15 @@ class NFLApiClient:
         """
         cache_key = f"nfl_team_details_{team_id}"
 
-        # Try to get from cache first (even if expired)
-        cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
+        # Try to get from cache first
+        # Note: diskcache automatically evicts expired entries
+        cached_data = sb_cache.get(cache_key, default=None)
         if cached_data is not None:
             debug.debug(f"NFL Board: Using cached detailed data for team {team_id}")
             detailed_team = self._dict_to_team(cached_data)
             if detailed_team and team_id in self.teams_cache:
                 self.teams_cache[team_id] = detailed_team
-
-                # Check if cache is still valid
-                cached_with_expiry = sb_cache.get(cache_key, default=None, expire_time=True)
-                if cached_with_expiry is not None and cached_with_expiry[0] is not None:
-                    # Cache is still valid, return immediately
-                    debug.debug(f"NFL Board: Cache is valid for team {team_id} details")
-                    return True
-                else:
-                    # Cache is expired but we'll use it anyway and refresh in background
-                    debug.debug(f"NFL Board: Cache expired for team {team_id} details, will refresh")
-                    # Continue to fetch fresh data below
+                return True
 
         try:
             url = f"{self.base_url}/teams/{team_id}"
@@ -717,10 +677,6 @@ class NFLApiClient:
 
         except Exception as exc:
             debug.error(f"NFL Board: Failed to fetch team details for {team_id}: {exc}")
-            # If we had stale cached data, we already updated teams_cache with it, so return True
-            if cached_data is not None:
-                debug.info(f"NFL Board: Using stale cache data for team {team_id} due to API failure")
-                return True
             return False
 
     def populate_team_details(self, team_ids: List[str]) -> int:
