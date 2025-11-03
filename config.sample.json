@@ -1,7 +1,7 @@
 {
     "team_ids": ["28", "2"],
     "display_seconds": 5,
-    "refresh_seconds": 180,
+    "refresh_seconds": 120,
     "show_all_games": true,
     "show_previous_games_until": "09:00",
     "enabled": true,

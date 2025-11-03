@@ -5,11 +5,10 @@ Handles API calls and data processing using APScheduler for background refresh.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-
 from utils import sb_cache
 
 debug = logging.getLogger("scoreboard")
@@ -167,7 +166,7 @@ class NFLApiClient:
         self.cache_completed_game_seconds = 43200  # 12 hours for completed games
         self.cache_upcoming_game_seconds = 3600  # 1 hour for upcoming games
 
-        debug.info(f"NFL API Client: Initialized with cache expiration times:")
+        debug.info("NFL API Client: Initialized with cache expiration times:")
         debug.info(f"  Teams: {self.cache_teams_seconds}s (24h)")
         debug.info(f"  Schedules: {self.cache_schedule_seconds}s (12h)")
         debug.info(f"  Standings: {self.cache_standings_seconds}s (4h)")

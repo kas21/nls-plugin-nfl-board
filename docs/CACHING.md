@@ -20,6 +20,7 @@ All cache data is stored using `diskcache` in `/tmp/sb_cache/`.
 ## Cache Architecture
 
 The caching system uses a **stale-while-revalidate** pattern:
+
 1. On startup, load data from cache immediately (even if expired)
 2. Background jobs refresh data before cache expires
 3. If API fails, serve stale cache data
@@ -29,8 +30,10 @@ The caching system uses a **stale-while-revalidate** pattern:
 ### Team Data
 
 #### `nfl_all_teams`
+
 - **Contains**: Basic information for all 32 NFL teams
 - **Data Structure**: Dictionary mapping team_id → team dict
+
   ```python
   {
     "team_id": str,
@@ -53,13 +56,16 @@ The caching system uses a **stale-while-revalidate** pattern:
     "division_name": str
   }
   ```
+
 - **Expiration**: 24 hours (86400 seconds)
 - **Rationale**: Team metadata rarely changes (names, colors, logos)
 - **Refreshed by**: `NFLApiClient.get_all_teams()`
 
 #### `nfl_team_details_{team_id}`
+
 - **Contains**: Detailed standings/record information for a specific team
 - **Data Structure**: Single team dict (same structure as above, but with complete record data)
+
   ```python
   {
     # ... all fields from nfl_all_teams ...
@@ -72,6 +78,7 @@ The caching system uses a **stale-while-revalidate** pattern:
     "division_name": "NFC East"
   }
   ```
+
 - **Expiration**: 4 hours (14400 seconds)
 - **Rationale**: Standings change after each game, need fresher data than basic team info
 - **Refreshed by**: `NFLApiClient.get_team_details(team_id)`
@@ -80,8 +87,10 @@ The caching system uses a **stale-while-revalidate** pattern:
 ### Game Data
 
 #### `nfl_scoreboard_{YYYYMMDD}`
+
 - **Contains**: All games for a specific date
 - **Data Structure**: List of game dicts
+
   ```python
   [
     {
@@ -101,6 +110,7 @@ The caching system uses a **stale-while-revalidate** pattern:
     }
   ]
   ```
+
 - **Expiration**: **Dynamic based on game state**
   - Live games: 60 seconds (1 minute)
   - Games starting within 2 hours: 60 seconds
@@ -116,6 +126,7 @@ The caching system uses a **stale-while-revalidate** pattern:
 ### Schedule Data
 
 #### `nfl_schedule_{team_id}`
+
 - **Contains**: Recent past and upcoming games for a specific team
 - **Data Structure**: List of game dicts (same structure as scoreboard)
 - **Expiration**: 12 hours (43200 seconds)
@@ -149,6 +160,7 @@ else:
 ```
 
 This ensures:
+
 - Live game scores update every minute
 - Pre-game transitions to live are caught immediately (2-hour window)
 - Completed games don't waste API calls
@@ -158,12 +170,14 @@ This ensures:
 
 Team data uses a two-tier approach:
 
-**Tier 1: Basic Data (24h)**
+#### Tier 1: Basic Data (24h)
+
 - Team names, colors, logos
 - Changes very rarely (team relocations, rebrands)
 - Long cache reduces API load
 
-**Tier 2: Detailed Records (4h)**
+#### Tier 2: Detailed Records (4h)
+
 - Win/loss records, standings, division rank
 - Changes after each game
 - Shorter cache ensures standings are current
@@ -185,6 +199,7 @@ Team data uses a two-tier approach:
 ### Background Refresh
 
 Background jobs update cache at these intervals:
+
 - Scheduled refresh: Every 180 seconds (configurable via `refresh_seconds`)
 - Each API call checks cache and updates if expired
 - Stale cache served if API fails
@@ -194,11 +209,13 @@ Background jobs update cache at these intervals:
 ### Inspecting Cache
 
 Use the cache inspector tool:
+
 ```bash
 uv run scripts/check_cache.py
 ```
 
 Shows:
+
 - All NFL cache entries
 - Expiration status (time remaining or time since expired)
 - Data size (number of items)
@@ -215,6 +232,7 @@ Cache will be rebuilt on next app start.
 ### Cache Issues
 
 If you see missing data on startup:
+
 1. Run `uv run scripts/check_cache.py` to check cache state
 2. Look for entries with very short expiration (< 1 minute)
 3. Check if detailed team records (`nfl_team_details_*`) exist
@@ -225,6 +243,7 @@ If you see missing data on startup:
 ### Cache Storage Format
 
 All data is stored using `diskcache.Cache.set()` with `read=False`:
+
 ```python
 sb_cache.set(cache_key, data_as_dict, expire=expiration_seconds, read=False)
 ```
@@ -234,6 +253,7 @@ The `read=False` parameter forces inline storage in the database rather than as 
 ### Cache Retrieval
 
 **In API methods (`data.py`)**: Standard cache retrieval respects expiration:
+
 ```python
 cached_data = sb_cache.get(cache_key, default=None)
 ```
@@ -241,6 +261,7 @@ cached_data = sb_cache.get(cache_key, default=None)
 If cache exists and is not expired, return it. Otherwise, fetch from API.
 
 **On startup (`board.py`)**: Cache-only loading ignores expiration:
+
 ```python
 cached_data = sb_cache.get(cache_key, default=None, expire_time=False)
 ```
@@ -252,6 +273,7 @@ This allows loading stale cache on startup for fast boot, then background jobs r
 ### Data Serialization
 
 Objects are converted to dicts for caching:
+
 - `NFLTeam` → dict via `_team_to_dict()`
 - `NFLGame` → dict via `_game_to_dict()`
 - Dicts → objects via `_dict_to_team()`, `_dict_to_game()`
@@ -276,6 +298,7 @@ Dates are stored as ISO format strings and parsed back to datetime objects.
 ### Cache Hit Rates
 
 Expected hit rates:
+
 - **Morning (off-day)**: ~95% cache hits
 - **Game day (pre-game)**: ~80% cache hits (frequent scoreboard updates)
 - **Game day (live)**: ~60% cache hits (scoreboard updates every minute)
@@ -290,6 +313,7 @@ Expected hit rates:
 **Cause**: Detailed team records not loaded from cache
 
 **Solution**: Check if `nfl_team_details_*` entries exist:
+
 ```bash
 uv run scripts/check_cache.py | grep team_details
 ```
@@ -303,6 +327,7 @@ If missing, cache was cleared or never populated. Wait for background refresh or
 **Cause**: Cache expiring too quickly or being evicted
 
 **Solution**:
+
 1. Check expiration times with cache inspector
 2. Verify cache entries have hours (not seconds) remaining
 3. If all entries show expired, check system time
@@ -319,7 +344,7 @@ If missing, cache was cleared or never populated. Wait for background refresh or
 
 While cache expiration times are built-in, you can influence caching behavior:
 
-- **`refresh_seconds`**: How often background job runs (default: 300)
+- **`refresh_seconds`**: How often background job runs (default: 120)
   - Shorter = more API calls, fresher data
   - Longer = fewer API calls, but relies more on cache
 
