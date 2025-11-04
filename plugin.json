@@ -1,6 +1,6 @@
 {
   "name": "nfl_board",
-  "version": "2025.11.01",
+  "version": "2025.11.02-beta",
   "description": "NFL Team Board",
   "author": "kas",
   "enabled": true,
