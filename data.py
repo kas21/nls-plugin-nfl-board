@@ -7,11 +7,15 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 from utils import sb_cache
 
 debug = logging.getLogger("scoreboard")
+
+# NFL games are scheduled in US Eastern Time
+NFL_TIMEZONE = ZoneInfo("America/New_York")
 
 def parse_espn_datetime(value: Optional[str]) -> Optional[datetime]:
     """Parse ESPN datetime strings which typically end with Z."""
@@ -181,7 +185,17 @@ class NFLApiClient:
 
         Uses stale-while-revalidate pattern: returns cached data (even if expired)
         for fast startup, then fetches fresh data if cache is expired.
+
+        Note: ESPN API expects dates in US Eastern Time, so we normalize the date
+        to Eastern Time to ensure we fetch the correct day's games.
         """
+        # Normalize to Eastern Time for ESPN API
+        # If date is naive, assume it's in local time and convert to ET
+        if date.tzinfo is None:
+            date = date.replace(tzinfo=ZoneInfo("localtime")).astimezone(NFL_TIMEZONE)
+        else:
+            date = date.astimezone(NFL_TIMEZONE)
+
         date_string = date.strftime("%Y%m%d")
         cache_key = f"nfl_scoreboard_{date_string}"
 
@@ -267,8 +281,8 @@ class NFLApiClient:
             return []
 
     def get_current_scoreboard(self) -> List[NFLGame]:
-        """Get current/today's games."""
-        return self.get_scoreboard_for_date(datetime.now())
+        """Get current/today's games in NFL Eastern Time."""
+        return self.get_scoreboard_for_date(datetime.now(NFL_TIMEZONE))
 
     def get_all_teams(self) -> Dict[str, NFLTeam]:
         """

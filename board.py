@@ -6,6 +6,7 @@ Displays NFL games and team information using clear, readable logic.
 import json
 import logging
 from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -18,6 +19,9 @@ from .data import NFLApiClient, NFLDataSnapshot, NFLGame, NFLTeam
 from .logos import NFLLogoManager
 
 debug = logging.getLogger("scoreboard")
+
+# NFL games are scheduled in US Eastern Time
+NFL_TIMEZONE = ZoneInfo("America/New_York")
 class NFLBoardConfig:
     """
     Handles NFL board configuration with validation and sensible defaults.
@@ -241,8 +245,8 @@ class NFLBoard(BoardBase):
 
         debug.debug("NFL Board: Attempting to load snapshot from cache")
 
-        # Check if we have any cached data at all
-        today = datetime.now()
+        # Check if we have any cached data at all (use NFL Eastern Time)
+        today = datetime.now(NFL_TIMEZONE)
         yesterday = today - timedelta(days=1)
 
         # Try to get cached teams data (most critical)
@@ -447,11 +451,11 @@ class NFLBoard(BoardBase):
                 if team_id in self.config.team_ids
             }
 
-            # Fetch today's games
-            today = datetime.now()
+            # Fetch today's games (in NFL Eastern Time)
+            today = datetime.now(NFL_TIMEZONE)
             snapshot.todays_games = self.api_client.get_scoreboard_for_date(today)
 
-            # Fetch yesterday's games
+            # Fetch yesterday's games (in NFL Eastern Time)
             yesterday = today - timedelta(days=1)
             snapshot.yesterdays_games = self.api_client.get_scoreboard_for_date(yesterday)
 
