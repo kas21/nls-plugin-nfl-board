@@ -241,7 +241,12 @@ class NFLBoard(BoardBase):
         This uses the stale-while-revalidate cache pattern - it will return
         cached data even if expired, allowing for fast startup.
         """
-        from utils import sb_cache
+        # Temporary handling for cache import while we transition to drop privs version
+        try:
+            from utils import get_or_create_cache
+            sb_cache = get_or_create_cache()
+        except ImportError:
+            from utils import sb_cache
 
         debug.debug("NFL Board: Attempting to load snapshot from cache")
 

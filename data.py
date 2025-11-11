@@ -10,7 +10,13 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import httpx
-from utils import sb_cache
+
+# Temporary handling for cache import while we transition to drop privs version
+try:
+    from utils import get_or_create_cache
+    sb_cache = get_or_create_cache()
+except ImportError:
+    from utils import sb_cache
 
 debug = logging.getLogger("scoreboard")
 
