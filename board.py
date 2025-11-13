@@ -105,9 +105,6 @@ class NFLBoard(BoardBase):
     NFL Board implementation following BoardBase pattern.
     """
 
-    # Class attribute: NFL Board requires early initialization for data fetching
-    requires_early_initialization = True
-
     def __init__(self, data, matrix, sleepEvent):
         super().__init__(data, matrix, sleepEvent)
 
@@ -146,9 +143,6 @@ class NFLBoard(BoardBase):
         # Gradient used for board
         self.gradient = self._load_gradient()
 
-        # Set up scheduled data refresh using APScheduler
-        self._scheduled_job_id = f"nfl_board_data_refresh_{id(self)}"
-
         # Try to load snapshot from cache first (stale-while-revalidate pattern)
         # This ensures fast startup by using cached data even if expired
         existing_snapshot = getattr(self.data, "nfl_board_snapshot", None)
@@ -160,9 +154,17 @@ class NFLBoard(BoardBase):
             else:
                 debug.info("NFL Board: Successfully loaded snapshot from cache")
 
-        # Schedule recurring data refresh in background
-        # This will refresh stale cache data automatically
-        self._setup_data_refresh_schedule()
+        # Schedule recurring data refresh using base class helper
+        # This automatically tracks the job for cleanup when board is unloaded
+        self.add_scheduled_job(
+            self._perform_data_refresh,
+            'interval',
+            job_id=f"nfl_board_data_refresh_{id(self)}",
+            seconds=self.config.refresh_seconds,
+            max_instances=1,
+            replace_existing=True
+        )
+        debug.info(f"NFL Board: Scheduled data refresh every {self.config.refresh_seconds} seconds")
 
         debug.info("NFL Board: Initialization complete")
 
@@ -210,27 +212,6 @@ class NFLBoard(BoardBase):
         except Exception as error:
             debug.error(f"NFL Board render error: {error}")
             self._render_error_display(str(error))
-
-    def _setup_data_refresh_schedule(self):
-        """Set up background data refresh using APScheduler."""
-        scheduler = getattr(self.data, "scheduler", None)
-        if not scheduler:
-            debug.warning("NFL Board: No scheduler available")
-            return
-
-        # Only add job if it doesn't already exist
-        if not scheduler.get_job(self._scheduled_job_id):
-            scheduler.add_job(
-                self._perform_data_refresh,
-                "interval",
-                seconds=self.config.refresh_seconds,
-                id=self._scheduled_job_id,
-                max_instances=1,
-                replace_existing=True,
-            )
-            debug.info(f"NFL Board: Scheduled data refresh every {self.config.refresh_seconds} seconds")
-        else:
-            debug.info("NFL Board: Data refresh job already scheduled")
 
     def _load_snapshot_from_cache(self) -> bool:
         """
@@ -1321,16 +1302,12 @@ class NFLBoard(BoardBase):
 
     def cleanup(self):
         """Clean up resources when board is unloaded."""
-        # this method is likely never used in current app architecture
-        # base_board should require this method if architecture ever changes load/unload boards
         debug.info("NFL Board: Cleaning up resources")
 
         # Clear caches and display state
         self.logo_cache.clear()
         self.current_display_items.clear()
 
-        # Remove scheduled job if it exists
-        scheduler = getattr(self.data, "scheduler", None)
-        if scheduler and scheduler.get_job(self._scheduled_job_id):
-            scheduler.remove_job(self._scheduled_job_id)
-            debug.info("NFL Board: Removed scheduled data refresh job")
+        # Call parent cleanup to automatically remove scheduled jobs
+        super().cleanup()
+        debug.info("NFL Board: Cleanup complete")
