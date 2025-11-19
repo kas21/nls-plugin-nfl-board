@@ -120,10 +120,73 @@ nano config.json
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `division` | String | "NFC East" | Division name to display (e.g., "NFC East", "AFC North") |
+| `division` | String or Array | "NFC East" | Division/conference name(s) to display. Can be a single string or array for multiple divisions |
 | `display_type` | String | "division" | Display mode: "division" or "conference" |
 | `scroll_speed` | Float | 0.2 | Speed of scrolling for long standings lists (pixels per frame) |
 | `use_large_font` | Boolean | true | Use larger font for standings (recommended for 128x64 displays) |
+
+#### Division Configuration Examples
+
+**Single Division (backwards compatible):**
+```json
+{
+    "division": "NFC East",
+    "display_type": "division"
+}
+```
+
+**Multiple Divisions (rotates through each):**
+```json
+{
+    "division": ["AFC East", "NFC East", "AFC North"],
+    "display_type": "division"
+}
+```
+
+**Multiple Conferences:**
+```json
+{
+    "division": ["AFC", "NFC"],
+    "display_type": "conference"
+}
+```
+
+**Important Configuration Notes:**
+
+When `display_type` is set to `"conference"`:
+- Use conference names directly: `["AFC", "NFC"]`
+- Or use division names and the conference will be auto-extracted: `["AFC East", "NFC North"]` → shows AFC and NFC conferences
+- The board will automatically extract the conference from division names (e.g., "AFC East" → "AFC")
+
+When `display_type` is set to `"division"`:
+- Use full division names: `"AFC East"`, `"NFC North"`, `"AFC West"`, etc.
+- **Shortcut:** Use `"AFC"` or `"NFC"` to show ALL divisions in that conference
+  - `"AFC"` expands to: `["AFC East", "AFC North", "AFC South", "AFC West"]`
+  - `"NFC"` expands to: `["NFC East", "NFC North", "NFC South", "NFC West"]`
+
+**Examples with shortcuts:**
+
+```json
+{
+    "division": "NFC",
+    "display_type": "division"
+}
+```
+This will rotate through all 4 NFC divisions (NFC East → NFC North → NFC South → NFC West), showing each division's standings separately.
+
+```json
+{
+    "division": ["AFC", "NFC East"],
+    "display_type": "division"
+}
+```
+This will show all 4 AFC divisions, then NFC East (5 total division standings).
+
+Valid division names:
+- **AFC**: `"AFC East"`, `"AFC North"`, `"AFC South"`, `"AFC West"`
+- **NFC**: `"NFC East"`, `"NFC North"`, `"NFC South"`, `"NFC West"`
+
+When multiple divisions/conferences are configured, the board will cycle through each one, displaying each for the configured `display_seconds` duration.
 
 ### Finding Team IDs
 

@@ -5,8 +5,16 @@
     "show_all_games": true,
     "show_previous_games_until": "09:00",
     "enabled": true,
+
+    "_comment_division": "DIVISION CONFIG: Can be a single string OR a list of divisions/conferences to rotate through",
+    "_comment_examples": "Single: 'NFC East' | Multiple: ['AFC East', 'NFC East', 'AFC North']",
+    "_comment_shortcut": "SHORTCUT: Use 'AFC' or 'NFC' with display_type='division' to show ALL divisions in that conference",
+    "_comment_conference_mode": "When display_type is 'conference', use conference names like ['AFC', 'NFC'] or division names will auto-extract conference",
     "division": "NFC East",
+
+    "_comment_display_type": "DISPLAY TYPE: 'division' shows division standings, 'conference' shows full conference standings",
     "display_type": "division",
+
     "scroll_speed": 0.2,
     "use_large_font": true
 }
