@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+
 from typing import List, Optional
 
 from boards.base_board import BoardBase
@@ -42,16 +43,29 @@ class NFLStandingsBoard(BoardBase):
         self.display_seconds = self.board_config.get("display_seconds", 5)
         self.scroll_speed = self.board_config.get("scroll_speed", 0.2)
         self.use_large_font = self.board_config.get("use_large_font", True)
+        self.disable_win_pct = self.board_config.get("disable_win_pct", False)
 
         # Set up font and dimensions based on display size (same as NHL standings)
         if self.use_large_font and self.matrix.width >= 128:
             self.font = data.config.layout.font_large
             self.font_height = 13
             self.width_multiplier = 2
+            self.logo_y_offset = 5
         else:
             self.font = data.config.layout.font
             self.font_height = 7
             self.width_multiplier = 1
+            self.logo_y_offset = 3
+
+        self.gradient = self._load_gradient()
+        self.logo = self._load_nfl_logo()
+        if self.logo:
+            # Resize logo if needed to fit in header area
+            logo_max_height = int(self.matrix.height ** 0.98)
+            if self.logo.height > logo_max_height:
+                ratio = logo_max_height / self.logo.height
+                new_width = int(self.logo.width * ratio)
+                self.logo = self.logo.resize((new_width, logo_max_height), Image.Resampling.LANCZOS)
 
         debug.info(f"NFL Standings Board: Configured for {self.display_type} - {len(self.divisions)} division(s): {', '.join(self.divisions)}")
         debug.info(f"NFL Standings Board: Using {'large' if self.width_multiplier == 2 else 'regular'} font")
@@ -270,10 +284,11 @@ class NFLStandingsBoard(BoardBase):
 
             # If image is taller than display, scroll it
             if image.height > self.matrix.height:
-                self._render_with_scroll(image)
+                self._render_with_scroll(image, title)
             else:
                 # Just display it
                 self.matrix.clear()
+                self._draw_header_and_nfl_logo(title)
                 self.matrix.draw_image((0, 0), image)
                 self.matrix.render()
                 self.sleepEvent.wait(self.display_seconds)
@@ -282,7 +297,26 @@ class NFLStandingsBoard(BoardBase):
             if len(self.divisions) > 1 and division != self.divisions[-1]:
                 self.sleepEvent.wait(0.5)
 
-    def _create_standings_image(self, title: str, standings: List[NFLTeam]) -> Image.Image:
+    def _draw_nfl_logo(self, title: str = "NFL Standings"):
+        # Try to add NFL logo and gradient on the right side
+        try:
+            # get gradient
+            gradient = self.gradient
+
+            # get NFL logo
+            nfl_logo = self.logo
+
+            logo_x = self.matrix.width - nfl_logo.width - 1
+            logo_y = self.logo_y_offset
+
+            self.matrix.draw_image((logo_x, logo_y), nfl_logo)
+            if not self.disable_win_pct:
+                #self.matrix.draw_image((logo_x - int((self.matrix.width-gradient.width) * .3), 0), gradient)
+                self.matrix.draw_image(("8%",0), gradient)
+        except Exception as e:
+            debug.warning(f"NFL Standings Board: Failed to add logo/gradient: {e}")
+
+    def _create_standings_image(self, title: str, standings: List[NFLTeam], draw_win_pct: bool = True) -> Image.Image:
         """
         Create a PIL Image with the standings table using team colors.
         Includes NFL logo and gradient overlay.
@@ -309,51 +343,9 @@ class NFLStandingsBoard(BoardBase):
         image = Image.new("RGB", (image_width, image_height), (0, 0, 0))
         draw = ImageDraw.Draw(image)
 
-        # Try to add NFL logo and gradient on the right side
-        try:
-            # Load gradient
-            gradient = self._load_gradient()
-
-            # Calculate position for right side (gradient is centered, we want right half)
-            # For 128x64, place starting at x=64 (right half)
-            gradient_x_pos = self.matrix.width // 2
-
-            # Paste gradient with alpha compositing
-            if gradient:
-                # Create temporary RGBA version of our image for compositing
-                image_rgba = image.convert('RGBA')
-                image_rgba.paste(gradient, (gradient_x_pos, 0), gradient)
-                image = image_rgba.convert('RGB')
-
-            # Load and overlay NFL logo
-            nfl_logo = self._load_nfl_logo()
-            if nfl_logo:
-                # Resize logo if needed to fit in header area
-                logo_max_height = self.matrix.height
-                if nfl_logo.height > logo_max_height:
-                    ratio = logo_max_height / nfl_logo.height
-                    new_width = int(nfl_logo.width * ratio)
-                    nfl_logo = nfl_logo.resize((new_width, logo_max_height), Image.Resampling.LANCZOS)
-
-                # Position logo in top right
-                logo_x = image_width - nfl_logo.width - 1
-                logo_y = 1
-
-                # Composite logo with alpha
-                image_rgba = image.convert('RGBA')
-                image_rgba.paste(nfl_logo, (logo_x, logo_y), nfl_logo)
-                image_rgba.paste(gradient, (logo_x - (self.matrix.width-gradient.width//2), logo_y), gradient)
-                image = image_rgba.convert('RGB')
-
-        except Exception as e:
-            debug.warning(f"NFL Standings Board: Failed to add logo/gradient: {e}")
-
         # Draw standings with colored team backgrounds (like NHL)
         draw = ImageDraw.Draw(image)  # Recreate draw object after image conversions
         row_pos = row_height
-
-        # Draw title on left side
-        draw.text((1, 0), title, font=self.font, fill=(200, 200, 200))
 
         for team in standings:
             # Draw colored rectangle background for team abbreviation
@@ -385,19 +377,29 @@ class NFLStandingsBoard(BoardBase):
             )
 
             # Draw win percentage (formatted to 3 decimal places like .625)
-            pct_text = f".{int(team.win_percent * 1000):03d}"
-            draw.text(
-                (35 * self.width_multiplier, row_pos),
-                pct_text,
-                font=self.font,
-                fill=(255, 255, 255)
-            )
+            if not self.disable_win_pct:
+                pct_text = f".{int(team.win_percent * 1000):03d}"
+                draw.text(
+                    (35 * self.width_multiplier, row_pos),
+                    pct_text,
+                    font=self.font,
+                    fill=(255, 255, 255)
+                )
 
             row_pos += row_height
 
+        # Trim width of image if needed (remove extra space on right)
+        image = image.crop((0, 0, image_width, row_pos))
+
+        # Trim Transparency (width only)
+        bbox = image.getbbox()
+        if bbox:
+            image = image.crop((bbox[0], 0, bbox[2], image.height))
+
+
         return image
 
-    def _render_with_scroll(self, image: Image.Image):
+    def _render_with_scroll(self, image: Image.Image, title: str):
         """
         Render image with vertical scrolling animation.
 
@@ -409,7 +411,11 @@ class NFLStandingsBoard(BoardBase):
 
         # Show top for a moment
         self.matrix.clear()
+        # Draw logo, gradient, standings, title
+        self._draw_nfl_logo()
         self.matrix.draw_image((0, y_offset), image)
+        self.matrix.draw_rectangle((0, 0), (image.width, self.font_height - 1), fill=(0, 0, 0))
+        self.matrix.draw_text((1, 0), title, font=self.font, fill=(200, 200, 200))
         self.matrix.render()
         self.sleepEvent.wait(self.display_seconds)
 
@@ -418,7 +424,10 @@ class NFLStandingsBoard(BoardBase):
         while y_offset > max_offset and not self.sleepEvent.is_set():
             y_offset -= 1
             self.matrix.clear()
+            self._draw_nfl_logo()
             self.matrix.draw_image((0, y_offset), image)
+            self.matrix.draw_rectangle((0, 0), (image.width, self.font_height - 1), fill=(0, 0, 0))
+            self.matrix.draw_text((1, 0), title, font=self.font, fill=(200, 200, 200))
             self.matrix.render()
             self.sleepEvent.wait(self.scroll_speed)
 

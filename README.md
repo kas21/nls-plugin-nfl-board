@@ -88,7 +88,8 @@ nano config.json
     "division": "NFC East",
     "display_type": "division",
     "scroll_speed": 0.2,
-    "use_large_font": true
+    "use_large_font": true,
+    "disable_win_pct": false
 }
 ```
 
@@ -124,6 +125,7 @@ nano config.json
 | `display_type` | String | "division" | Display mode: "division" or "conference" |
 | `scroll_speed` | Float | 0.2 | Speed of scrolling for long standings lists (pixels per frame) |
 | `use_large_font` | Boolean | true | Use larger font for standings (recommended for 128x64 displays) |
+| `disable_win_pct` | Boolean | false | Disable displaying win percentage, showing only team records |
 
 #### Division Configuration Examples
 
@@ -227,7 +229,7 @@ The standings board displays current NFL standings with the following features:
 - **Conference View**: Shows all teams in a conference (e.g., "NFC", "AFC")
 - **Team-Colored Backgrounds**: Each team entry uses the team's primary color as background
 - **Smart Text Colors**: Team abbreviations use secondary team colors with WCAG-compliant contrast checking
-- **Win Percentage**: Displays win percentage alongside team records
+- **Win Percentage**: Displays win percentage alongside team records (can be disabled with `disable_win_pct` option)
 - **Automatic Scrolling**: Scrolls smoothly when standings exceed display height
 
 Standings are sorted by wins (descending), losses (ascending), and ties.

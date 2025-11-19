@@ -15,6 +15,7 @@
     "_comment_display_type": "DISPLAY TYPE: 'division' shows division standings, 'conference' shows full conference standings",
     "display_type": "division",
 
-    "scroll_speed": 0.2,
-    "use_large_font": true
+    "scroll_speed": 0.7,
+    "use_large_font": true,
+    "disable_win_pct": true
 }
