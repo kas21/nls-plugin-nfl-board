@@ -26,8 +26,19 @@ class NFLStandingsBoard(BoardBase):
         self.board_description = __description__
 
         # Get configuration values with defaults
-        self.division = self.board_config.get("division", "NFC East")
         self.display_type = self.board_config.get("display_type", "division")  # 'division' or 'conference'
+
+        # Support both single string (backwards compatibility) and list of divisions/conferences
+        division_config = self.board_config.get("division", "NFC East")
+        if isinstance(division_config, str):
+            self.divisions = self._expand_division_config([division_config])
+        elif isinstance(division_config, list):
+            self.divisions = self._expand_division_config(division_config)
+        else:
+            debug.warning(f"NFL Standings Board: Invalid division config type: {type(division_config)}, using default")
+            self.divisions = ["NFC East"]
+
+        self.current_division_index = 0  # Track which division we're showing
         self.display_seconds = self.board_config.get("display_seconds", 5)
         self.scroll_speed = self.board_config.get("scroll_speed", 0.2)
         self.use_large_font = self.board_config.get("use_large_font", True)
@@ -42,8 +53,44 @@ class NFLStandingsBoard(BoardBase):
             self.font_height = 7
             self.width_multiplier = 1
 
-        debug.info(f"NFL Standings Board: Configured for {self.display_type} - {self.division}")
+        debug.info(f"NFL Standings Board: Configured for {self.display_type} - {len(self.divisions)} division(s): {', '.join(self.divisions)}")
         debug.info(f"NFL Standings Board: Using {'large' if self.width_multiplier == 2 else 'regular'} font")
+
+    def _expand_division_config(self, division_list: List[str]) -> List[str]:
+        """
+        Expand division config to handle shortcuts.
+
+        If display_type is "division":
+        - "AFC" or "NFC" expands to all divisions in that conference
+        - "AFC East" stays as "AFC East"
+
+        If display_type is "conference":
+        - Everything passes through as-is (handled in render method)
+
+        Args:
+            division_list: List of division/conference names from config
+
+        Returns:
+            Expanded list of divisions
+        """
+        if self.display_type != "division":
+            # For conference mode, don't expand - let render() handle it
+            return division_list
+
+        expanded = []
+        for item in division_list:
+            # Check if this is a conference shortcut (AFC or NFC without a division)
+            if item == "AFC":
+                debug.info("NFL Standings Board: Expanding 'AFC' to all AFC divisions")
+                expanded.extend(["AFC East", "AFC North", "AFC South", "AFC West"])
+            elif item == "NFC":
+                debug.info("NFL Standings Board: Expanding 'NFC' to all NFC divisions")
+                expanded.extend(["NFC East", "NFC North", "NFC South", "NFC West"])
+            else:
+                # Regular division name or conference with space
+                expanded.append(item)
+
+        return expanded
 
     def _get_snapshot(self) -> Optional[NFLDataSnapshot]:
         """Get the cached NFL data snapshot from the main NFL board."""
@@ -178,6 +225,7 @@ class NFLStandingsBoard(BoardBase):
     def render(self):
         """
         Render the NFL standings board with scrolling if needed.
+        Cycles through all configured divisions/conferences.
         Uses cached data from the main NFL board snapshot.
         """
         # Check if we have cached data available
@@ -190,36 +238,49 @@ class NFLStandingsBoard(BoardBase):
             self.sleepEvent.wait(self.display_seconds)
             return
 
-        # Get standings based on display type
-        if self.display_type == "conference":
-            # Extract conference from division (e.g., "AFC East" -> "AFC")
-            conference = self.division.split()[0]
-            standings = self._get_conference_standings(conference)
-            title = f"{conference} Standings"
-        else:
-            standings = self._get_division_standings(self.division)
-            title = f"{self.division}"
+        # Cycle through all configured divisions/conferences
+        for division in self.divisions:
+            if self.sleepEvent.is_set():
+                break
 
-        if not standings:
-            debug.warning(f"NFL Standings Board: No standings data for {self.division}")
-            self.matrix.clear()
-            self.matrix.draw_text((0, 0), "No Data", font=self.font, fill=(255, 255, 255))
-            self.matrix.render()
-            self.sleepEvent.wait(self.display_seconds)
-            return
+            # Get standings based on display type
+            if self.display_type == "conference":
+                # Extract conference from division string
+                # Handles both "AFC East" -> "AFC" and "AFC" -> "AFC"
+                if " " in division:
+                    # Division name like "AFC East", extract conference part
+                    conference = division.split()[0]
+                else:
+                    # Already a conference like "AFC" or "NFC"
+                    conference = division
 
-        # Create standings image
-        image = self._create_standings_image(title, standings)
+                standings = self._get_conference_standings(conference)
+                title = f"{conference} Standings"
+            else:
+                # Division mode - division should already be expanded by _expand_division_config
+                standings = self._get_division_standings(division)
+                title = f"{division}"
 
-        # If image is taller than display, scroll it
-        if image.height > self.matrix.height:
-            self._render_with_scroll(image)
-        else:
-            # Just display it
-            self.matrix.clear()
-            self.matrix.draw_image((0, 0), image)
-            self.matrix.render()
-            self.sleepEvent.wait(self.display_seconds)
+            if not standings:
+                debug.warning(f"NFL Standings Board: No standings data for {division}")
+                continue
+
+            # Create standings image
+            image = self._create_standings_image(title, standings)
+
+            # If image is taller than display, scroll it
+            if image.height > self.matrix.height:
+                self._render_with_scroll(image)
+            else:
+                # Just display it
+                self.matrix.clear()
+                self.matrix.draw_image((0, 0), image)
+                self.matrix.render()
+                self.sleepEvent.wait(self.display_seconds)
+
+            # Add a small delay between divisions if showing multiple
+            if len(self.divisions) > 1 and division != self.divisions[-1]:
+                self.sleepEvent.wait(0.5)
 
     def _create_standings_image(self, title: str, standings: List[NFLTeam]) -> Image.Image:
         """
