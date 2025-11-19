@@ -43,22 +43,25 @@ class NFLStandingsBoard(BoardBase):
         self.display_seconds = self.board_config.get("display_seconds", 5)
         self.scroll_speed = self.board_config.get("scroll_speed", 0.2)
         self.use_large_font = self.board_config.get("use_large_font", True)
+        self.disable_win_pct = self.board_config.get("disable_win_pct", False)
 
         # Set up font and dimensions based on display size (same as NHL standings)
         if self.use_large_font and self.matrix.width >= 128:
             self.font = data.config.layout.font_large
             self.font_height = 13
             self.width_multiplier = 2
+            self.logo_y_offset = 5
         else:
             self.font = data.config.layout.font
             self.font_height = 7
             self.width_multiplier = 1
+            self.logo_y_offset = 3
 
         self.gradient = self._load_gradient()
         self.logo = self._load_nfl_logo()
         if self.logo:
             # Resize logo if needed to fit in header area
-            logo_max_height = self.matrix.height
+            logo_max_height = int(self.matrix.height ** 0.98)
             if self.logo.height > logo_max_height:
                 ratio = logo_max_height / self.logo.height
                 new_width = int(self.logo.width * ratio)
@@ -304,15 +307,16 @@ class NFLStandingsBoard(BoardBase):
             nfl_logo = self.logo
 
             logo_x = self.matrix.width - nfl_logo.width - 1
-            logo_y = 2
+            logo_y = self.logo_y_offset
 
             self.matrix.draw_image((logo_x, logo_y), nfl_logo)
-            self.matrix.draw_image((logo_x - (self.matrix.width-gradient.width//2), 0), gradient)
-
+            if not self.disable_win_pct:
+                #self.matrix.draw_image((logo_x - int((self.matrix.width-gradient.width) * .3), 0), gradient)
+                self.matrix.draw_image(("8%",0), gradient)
         except Exception as e:
             debug.warning(f"NFL Standings Board: Failed to add logo/gradient: {e}")
 
-    def _create_standings_image(self, title: str, standings: List[NFLTeam]) -> Image.Image:
+    def _create_standings_image(self, title: str, standings: List[NFLTeam], draw_win_pct: bool = True) -> Image.Image:
         """
         Create a PIL Image with the standings table using team colors.
         Includes NFL logo and gradient overlay.
@@ -373,13 +377,14 @@ class NFLStandingsBoard(BoardBase):
             )
 
             # Draw win percentage (formatted to 3 decimal places like .625)
-            pct_text = f".{int(team.win_percent * 1000):03d}"
-            draw.text(
-                (35 * self.width_multiplier, row_pos),
-                pct_text,
-                font=self.font,
-                fill=(255, 255, 255)
-            )
+            if not self.disable_win_pct:
+                pct_text = f".{int(team.win_percent * 1000):03d}"
+                draw.text(
+                    (35 * self.width_multiplier, row_pos),
+                    pct_text,
+                    font=self.font,
+                    fill=(255, 255, 255)
+                )
 
             row_pos += row_height
 
