@@ -19,7 +19,7 @@
   ],
 
   "requirements": {
-    "app_version": ">=2025.10.1",
+    "app_version": ">=2025.11.03",
     "python_dependencies": []
   },
 
