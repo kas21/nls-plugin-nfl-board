@@ -286,12 +286,13 @@ class NFLStandingsBoard(BoardBase):
             if image.height > self.matrix.height:
                 self._render_with_scroll(image, title)
             else:
+                self._render_with_scroll(image, title)
                 # Just display it
-                self.matrix.clear()
-                self._draw_header_and_nfl_logo(title)
-                self.matrix.draw_image((0, 0), image)
-                self.matrix.render()
-                self.sleepEvent.wait(self.display_seconds)
+                # self.matrix.clear()
+                # self._draw_header_and_nfl_logo(title)
+                # self.matrix.draw_image((0, 0), image)
+                # self.matrix.render()
+                # self.sleepEvent.wait(self.display_seconds)
 
             # Add a small delay between divisions if showing multiple
             if len(self.divisions) > 1 and division != self.divisions[-1]:
@@ -341,11 +342,10 @@ class NFLStandingsBoard(BoardBase):
 
         # Create base image (RGB for final output)
         image = Image.new("RGB", (image_width, image_height), (0, 0, 0))
-        draw = ImageDraw.Draw(image)
 
         # Draw standings with colored team backgrounds (like NHL)
-        draw = ImageDraw.Draw(image)  # Recreate draw object after image conversions
-        row_pos = row_height
+        draw = ImageDraw.Draw(image)
+        row_pos = row_height - 1
 
         for team in standings:
             # Draw colored rectangle background for team abbreviation
