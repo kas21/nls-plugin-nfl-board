@@ -244,30 +244,31 @@ class NFLApiClient:
             # Determine cache expiration based on game states
             # Priority order (shortest expiration wins):
             # 1. Any games live → 1 minute (need frequent updates)
-            # 2. Any games starting within 2 hours → 1 minute (catch when they go live)
+            # 2. Any games starting within 2 hours OR started within last 30 min → 1 minute (catch when they go live and during transition)
             # 3. All games completed → 12 hours (scores won't change)
             # 4. All games far in future → 1 hour (times are stable)
 
             has_live = any(game.is_live for game in games)
             all_completed = all(game.is_final for game in games) if games else False
 
-            # Check if any games are starting soon (within 2 hours)
+            # Check if any games are starting soon (within 2 hours) OR started recently (within last 30 minutes)
+            # This ensures we keep refreshing frequently during the transition when games start
             now = datetime.now(timezone.utc)
-            has_starting_soon = False
+            has_starting_soon_or_recently_started = False
             for game in games:
                 if game.date and not game.is_final:
                     time_until_game = (game.date - now).total_seconds()
-                    # Game starts within 2 hours (7200 seconds)
-                    if 0 <= time_until_game <= 7200:
-                        has_starting_soon = True
+                    # Game starts within 2 hours OR started within last 30 minutes (1800 seconds)
+                    if -1800 <= time_until_game <= 7200:
+                        has_starting_soon_or_recently_started = True
                         break
 
             if has_live:
                 cache_expire = self.cache_live_game_seconds
                 expire_desc = "live games"
-            elif has_starting_soon:
+            elif has_starting_soon_or_recently_started:
                 cache_expire = self.cache_live_game_seconds
-                expire_desc = "games starting soon"
+                expire_desc = "games starting soon or recently started"
             elif all_completed:
                 cache_expire = self.cache_completed_game_seconds
                 expire_desc = "all completed"
