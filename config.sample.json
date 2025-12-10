@@ -10,12 +10,12 @@
     "_comment_examples": "Single: 'NFC East' | Multiple: ['AFC East', 'NFC East', 'AFC North']",
     "_comment_shortcut": "SHORTCUT: Use 'AFC' or 'NFC' with display_type='division' to show ALL divisions in that conference",
     "_comment_conference_mode": "When display_type is 'conference', use conference names like ['AFC', 'NFC'] or division names will auto-extract conference",
-    "division": "NFC East",
+    "division": ["NFC", "AFC"],
 
     "_comment_display_type": "DISPLAY TYPE: 'division' shows division standings, 'conference' shows full conference standings",
-    "display_type": "division",
+    "display_type": "conference",
 
-    "scroll_speed": 0.7,
+    "scroll_speed": 0.09,
     "use_large_font": true,
     "disable_win_pct": true
 }
