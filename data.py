@@ -5,7 +5,7 @@ Handles API calls and data processing using APScheduler for background refresh.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -913,3 +913,372 @@ class NFLDataSnapshot:
                     conferences.add('NFC')
 
         return sorted(conferences)
+
+
+class NFLDataManager:
+    """
+    Shared data manager that handles NFL data fetching and caching.
+    Can be used independently by any board that needs NFL data.
+
+    This manager:
+    - Fetches and caches NFL teams, games, schedules
+    - Manages data refresh scheduling
+    - Stores data in a global snapshot accessible to all boards
+    - Ensures only one refresh job runs at a time (singleton pattern)
+    - Uses reference counting to prevent premature job removal
+    """
+
+    _instance = None
+    _refresh_job_id = None
+    _reference_count = 0  # Track how many boards are using this manager
+
+    @classmethod
+    def get_instance(cls, data, config: dict = None, scheduler=None):
+        """
+        Get or create the singleton instance of NFLDataManager.
+
+        Args:
+            data: The data object (for storing snapshot)
+            config: Configuration dict with refresh_seconds, cache_expiration_seconds, team_ids
+            scheduler: APScheduler instance for scheduling refreshes
+
+        Returns:
+            NFLDataManager instance
+        """
+        if cls._instance is None:
+            cls._instance = cls(data, config or {}, scheduler)
+        elif config:
+            # Update config if new config provided
+            cls._instance._update_config(config)
+
+        # Increment reference count
+        cls._reference_count += 1
+        debug.debug(f"NFL Data Manager: Reference count increased to {cls._reference_count}")
+
+        return cls._instance
+
+    @classmethod
+    def release_instance(cls):
+        """
+        Release a reference to the data manager.
+        Should be called from board cleanup methods.
+        Only stops the scheduler when all references are released.
+
+        Returns:
+            bool: True if this was the last reference and scheduler was stopped
+        """
+        if cls._reference_count > 0:
+            cls._reference_count -= 1
+            debug.debug(f"NFL Data Manager: Reference count decreased to {cls._reference_count}")
+
+        if cls._reference_count == 0 and cls._instance:
+            debug.info("NFL Data Manager: Last reference released, stopping scheduler")
+            cls._instance.stop_refresh_scheduler()
+            # Note: We keep the instance alive for potential future use
+            # but stop the scheduled job
+            return True
+
+        return False
+
+    def __init__(self, data, config: dict, scheduler=None):
+        """Initialize the data manager (private - use get_instance())."""
+        self.data = data
+        self.scheduler = scheduler
+
+        # Parse configuration
+        self.refresh_seconds = int(config.get("refresh_seconds", 300))
+        self.cache_expiration_seconds = int(config.get("cache_expiration_seconds", self.refresh_seconds))
+
+        # Team IDs to track (can be empty for standings-only usage)
+        team_ids_config = config.get("team_ids", [])
+        if isinstance(team_ids_config, str):
+            team_ids_config = [team_ids_config]
+        self.team_ids = [str(tid).strip() for tid in team_ids_config if str(tid).strip()]
+
+        # Initialize API client
+        self.api_client = NFLApiClient(cache_expiration_seconds=self.cache_expiration_seconds)
+
+        debug.info(f"NFL Data Manager: Initialized with refresh every {self.refresh_seconds}s")
+        if self.team_ids:
+            debug.info(f"NFL Data Manager: Tracking teams: {self.team_ids}")
+        else:
+            debug.info("NFL Data Manager: No specific teams configured (standings-only mode)")
+
+    def _update_config(self, config: dict):
+        """Update configuration with new values."""
+        new_refresh = int(config.get("refresh_seconds", self.refresh_seconds))
+        new_cache_exp = int(config.get("cache_expiration_seconds", self.cache_expiration_seconds))
+
+        # Update team IDs
+        team_ids_config = config.get("team_ids", self.team_ids)
+        if isinstance(team_ids_config, str):
+            team_ids_config = [team_ids_config]
+        new_team_ids = [str(tid).strip() for tid in team_ids_config if str(tid).strip()]
+
+        # Check if we need to reschedule refresh job
+        if new_refresh != self.refresh_seconds:
+            debug.info(f"NFL Data Manager: Updating refresh interval from {self.refresh_seconds}s to {new_refresh}s")
+            self.refresh_seconds = new_refresh
+            if self.scheduler and NFLDataManager._refresh_job_id:
+                self._schedule_refresh()
+
+        if new_cache_exp != self.cache_expiration_seconds:
+            debug.info(f"NFL Data Manager: Updating cache expiration from {self.cache_expiration_seconds}s to {new_cache_exp}s")
+            self.cache_expiration_seconds = new_cache_exp
+            self.api_client.cache_expiration_seconds = new_cache_exp
+
+        if new_team_ids != self.team_ids:
+            debug.info(f"NFL Data Manager: Updating tracked teams from {self.team_ids} to {new_team_ids}")
+            self.team_ids = new_team_ids
+
+    def ensure_data_loaded(self):
+        """
+        Ensure NFL data is loaded and available.
+        Loads from cache if available, otherwise performs full refresh.
+        """
+        existing_snapshot = getattr(self.data, "nfl_shared_snapshot", None)
+        if existing_snapshot is None:
+            debug.info("NFL Data Manager: No snapshot exists, attempting to load from cache")
+            if not self._load_snapshot_from_cache():
+                debug.info("NFL Data Manager: No cache available, performing full API refresh")
+                self._perform_data_refresh()
+            else:
+                debug.info("NFL Data Manager: Successfully loaded snapshot from cache")
+
+    def start_refresh_scheduler(self, scheduler):
+        """
+        Start the background data refresh scheduler.
+        Only one refresh job will run globally.
+
+        Args:
+            scheduler: APScheduler instance
+        """
+        self.scheduler = scheduler
+        self._schedule_refresh()
+
+    def _schedule_refresh(self):
+        """Schedule or reschedule the data refresh job."""
+        if not self.scheduler:
+            debug.warning("NFL Data Manager: No scheduler available, cannot schedule refresh")
+            return
+
+        # Create new job ID (singleton pattern - shared across all board instances)
+        NFLDataManager._refresh_job_id = "nfl_shared_data_refresh"
+
+        # Schedule new job - replace_existing=True handles job already existing
+        # This is safe to call multiple times - APScheduler will just update the existing job
+        self.scheduler.add_job(
+            self._perform_data_refresh,
+            'interval',
+            id=NFLDataManager._refresh_job_id,
+            seconds=self.refresh_seconds,
+            max_instances=1,
+            replace_existing=True
+        )
+        debug.info(f"NFL Data Manager: Scheduled data refresh every {self.refresh_seconds} seconds (job_id={NFLDataManager._refresh_job_id})")
+
+    def stop_refresh_scheduler(self):
+        """Stop the background data refresh scheduler."""
+        if self.scheduler and NFLDataManager._refresh_job_id:
+            try:
+                self.scheduler.remove_job(NFLDataManager._refresh_job_id)
+                debug.info("NFL Data Manager: Stopped data refresh scheduler")
+            except Exception as e:
+                debug.warning(f"NFL Data Manager: Failed to stop scheduler: {e}")
+
+    def get_snapshot(self) -> Optional[NFLDataSnapshot]:
+        """Get the current data snapshot."""
+        return getattr(self.data, "nfl_shared_snapshot", None)
+
+    def _load_snapshot_from_cache(self) -> bool:
+        """
+        Try to load a snapshot from cache only (no API calls).
+        Returns True if cache was available and snapshot was created.
+        """
+        debug.debug("NFL Data Manager: Attempting to load snapshot from cache")
+
+        # Check if we have any cached data at all (use NFL Eastern Time)
+        today = datetime.now(NFL_TIMEZONE)
+        yesterday = today - timedelta(days=1)
+
+        # Try to get cached teams data (most critical)
+        teams_cache_key = "nfl_all_teams"
+        cached_teams_data = sb_cache.get(teams_cache_key, default=None, expire_time=False)
+
+        if not cached_teams_data:
+            debug.debug("NFL Data Manager: No cached teams data available")
+            return False
+
+        debug.debug("NFL Data Manager: Found cached teams data, building snapshot from cache")
+
+        try:
+            # Create snapshot from cache
+            snapshot = NFLDataSnapshot()
+
+            # Parse teams from cache
+            all_teams = {}
+            for team_id, team_dict in cached_teams_data.items():
+                team = self.api_client._dict_to_team(team_dict)
+                if team:
+                    all_teams[team_id] = team
+
+            if not all_teams:
+                debug.warning("NFL Data Manager: Cached teams data was empty or invalid")
+                return False
+
+            snapshot.all_teams = all_teams
+
+            # Try to load detailed team records from cache
+            debug.debug("NFL Data Manager: Loading detailed team records from cache")
+            detailed_loaded = 0
+            for team_id in all_teams.keys():
+                detail_cache_key = f"nfl_team_details_{team_id}"
+                cached_team_details = sb_cache.get(detail_cache_key, default=None, expire_time=False)
+                if cached_team_details:
+                    detailed_team = self.api_client._dict_to_team(cached_team_details)
+                    if detailed_team:
+                        all_teams[team_id] = detailed_team
+                        detailed_loaded += 1
+
+            debug.debug(f"NFL Data Manager: Loaded detailed records for {detailed_loaded}/{len(all_teams)} teams from cache")
+
+            # Get favorite teams subset if team_ids configured
+            if self.team_ids:
+                snapshot.favorite_teams = {
+                    team_id: team for team_id, team in all_teams.items()
+                    if team_id in self.team_ids
+                }
+
+            # Try to load today's games from cache
+            today_cache_key = f"nfl_scoreboard_{today.strftime('%Y%m%d')}"
+            cached_today_games = sb_cache.get(today_cache_key, default=None, expire_time=False)
+            if cached_today_games:
+                debug.debug("NFL Data Manager: Found cached today's games")
+                snapshot.todays_games = [
+                    self.api_client._dict_to_game(game_dict)
+                    for game_dict in cached_today_games
+                    if self.api_client._dict_to_game(game_dict)
+                ]
+
+            # Try to load yesterday's games from cache
+            yesterday_cache_key = f"nfl_scoreboard_{yesterday.strftime('%Y%m%d')}"
+            cached_yesterday_games = sb_cache.get(yesterday_cache_key, default=None, expire_time=False)
+            if cached_yesterday_games:
+                debug.debug("NFL Data Manager: Found cached yesterday's games")
+                snapshot.yesterdays_games = [
+                    self.api_client._dict_to_game(game_dict)
+                    for game_dict in cached_yesterday_games
+                    if self.api_client._dict_to_game(game_dict)
+                ]
+
+            # Identify live games
+            snapshot.live_games = [game for game in snapshot.todays_games if game.is_live]
+
+            # Get favorite team games if team_ids configured
+            if self.team_ids:
+                all_recent_games = snapshot.todays_games + snapshot.yesterdays_games
+                snapshot.favorite_team_games = [
+                    game for game in all_recent_games
+                    if any(game.involves_team(team_id) for team_id in self.team_ids)
+                ]
+
+                # Try to load team schedules from cache
+                for team_id in self.team_ids:
+                    schedule_cache_key = f"nfl_schedule_{team_id}"
+                    cached_schedule = sb_cache.get(schedule_cache_key, default=None, expire_time=False)
+                    if cached_schedule:
+                        debug.debug(f"NFL Data Manager: Found cached schedule for team {team_id}")
+                        snapshot.team_schedules[team_id] = [
+                            self.api_client._dict_to_game(game_dict)
+                            for game_dict in cached_schedule
+                            if self.api_client._dict_to_game(game_dict)
+                        ]
+
+            # Store the snapshot
+            self.data.nfl_shared_snapshot = snapshot
+
+            debug.info(
+                f"NFL Data Manager: Loaded snapshot from cache - {len(snapshot.todays_games)} today, "
+                f"{len(snapshot.yesterdays_games)} yesterday"
+            )
+
+            return True
+
+        except Exception as error:
+            debug.error(f"NFL Data Manager: Failed to build snapshot from cache: {error}")
+            return False
+
+    def _perform_data_refresh(self):
+        """
+        Complete data refresh with all NFL information.
+        Fetches comprehensive data: teams, detailed records, games, and schedules.
+        """
+        debug.info("NFL Data Manager: Performing data refresh")
+
+        try:
+            # Create new data snapshot
+            snapshot = NFLDataSnapshot()
+
+            # Fetch all teams data first
+            all_teams = self.api_client.get_all_teams()
+            if not all_teams:
+                snapshot.error_message = "Failed to fetch teams data"
+                debug.error("NFL Data Manager: Failed to fetch teams data")
+                self.data.nfl_shared_snapshot = snapshot
+                return
+
+            snapshot.all_teams = all_teams
+
+            # Populate detailed information for ALL teams
+            all_team_ids = list(all_teams.keys())
+            detailed_count = self.api_client.populate_team_details(all_team_ids)
+            debug.debug(f"NFL Data Manager: Loaded detailed data for {detailed_count} total teams")
+
+            # Get favorite teams subset if team_ids configured
+            if self.team_ids:
+                snapshot.favorite_teams = {
+                    team_id: team for team_id, team in all_teams.items()
+                    if team_id in self.team_ids
+                }
+
+            # Fetch today's games (in NFL Eastern Time)
+            today = datetime.now(NFL_TIMEZONE)
+            snapshot.todays_games = self.api_client.get_scoreboard_for_date(today)
+
+            # Fetch yesterday's games (in NFL Eastern Time)
+            yesterday = today - timedelta(days=1)
+            snapshot.yesterdays_games = self.api_client.get_scoreboard_for_date(yesterday)
+
+            # Identify live games
+            snapshot.live_games = [game for game in snapshot.todays_games if game.is_live]
+
+            # Get favorite team games and schedules if team_ids configured
+            if self.team_ids:
+                favorite_team_games = []
+                all_recent_games = snapshot.todays_games + snapshot.yesterdays_games
+
+                for game in all_recent_games:
+                    if any(game.involves_team(team_id) for team_id in self.team_ids):
+                        favorite_team_games.append(game)
+
+                snapshot.favorite_team_games = favorite_team_games
+
+                # Get team schedules for favorite teams (for upcoming games)
+                for team_id in self.team_ids:
+                    team_schedule = self.api_client.get_team_schedule(team_id)
+                    snapshot.team_schedules[team_id] = team_schedule
+
+            # Store snapshot for all boards to use
+            self.data.nfl_shared_snapshot = snapshot
+
+            debug.info(
+                f"NFL Data Manager: Data refresh complete - {len(snapshot.todays_games)} today, "
+                f"{len(snapshot.yesterdays_games)} yesterday"
+            )
+
+        except Exception as error:
+            debug.error(f"NFL Data Manager: Data refresh failed: {error}")
+            # Store error snapshot
+            error_snapshot = NFLDataSnapshot()
+            error_snapshot.error_message = f"Data refresh failed: {error}"
+            self.data.nfl_shared_snapshot = error_snapshot

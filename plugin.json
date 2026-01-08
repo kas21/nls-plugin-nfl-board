@@ -1,6 +1,6 @@
 {
   "name": "nfl_board",
-  "version": "2025.12.01",
+  "version": "2026.1.1-beta",
   "description": "NFL Team Board",
   "author": "kas",
   "enabled": true,
@@ -9,7 +9,14 @@
     {
       "id": "nfl_board",
       "class_name": "NFLBoard",
-      "module": "board"
+      "module": "board",
+      "deprecated": true,
+      "deprecated_message": "Use 'nfl_team_summary' instead. 'nfl_board' is kept for backward compatibility."
+    },
+    {
+      "id": "nfl_team_summary",
+      "class_name": "NFLTeamSummaryBoard",
+      "module": "nfl_team_summary"
     },
     {
       "id": "nfl_standings",

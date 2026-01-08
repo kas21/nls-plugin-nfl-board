@@ -8,14 +8,14 @@ from PIL import Image, ImageDraw
 from utils import get_file
 
 from . import __board_name__, __description__, __version__
-from .data import NFLDataSnapshot, NFLTeam
+from .data import NFLDataSnapshot, NFLTeam, NFLDataManager
 
 debug = logging.getLogger("scoreboard")
 
 class NFLStandingsBoard(BoardBase):
     """
     NFL Standings board module that displays the current NFL standings.
-    Uses cached data from the main NFL board's data snapshot.
+    Now works independently without requiring NFLBoard to be enabled.
     """
 
     def __init__(self, data, matrix, sleepEvent):
@@ -70,6 +70,25 @@ class NFLStandingsBoard(BoardBase):
         debug.info(f"NFL Standings Board: Configured for {self.display_type} - {len(self.divisions)} division(s): {', '.join(self.divisions)}")
         debug.info(f"NFL Standings Board: Using {'large' if self.width_multiplier == 2 else 'regular'} font")
 
+        # Initialize shared data manager (works independently of NFLBoard)
+        # The data manager is a singleton, so if NFLBoard is also enabled, they'll share the same instance
+        data_manager_config = {
+            "refresh_seconds": self.board_config.get("refresh_seconds", 300),
+            "cache_expiration_seconds": self.board_config.get("cache_expiration_seconds", 300),
+            "team_ids": []  # Standings doesn't need favorite teams
+        }
+        self.data_manager = NFLDataManager.get_instance(data, data_manager_config)
+
+        # Ensure data is loaded (from cache or API)
+        self.data_manager.ensure_data_loaded()
+
+        # Start the refresh scheduler if not already running
+        if hasattr(data, 'scheduler') and data.scheduler:
+            self.data_manager.start_refresh_scheduler(data.scheduler)
+            debug.info("NFL Standings Board: Started data refresh scheduler")
+        else:
+            debug.warning("NFL Standings Board: No scheduler available, data won't auto-refresh")
+
     def _expand_division_config(self, division_list: List[str]) -> List[str]:
         """
         Expand division config to handle shortcuts.
@@ -107,8 +126,8 @@ class NFLStandingsBoard(BoardBase):
         return expanded
 
     def _get_snapshot(self) -> Optional[NFLDataSnapshot]:
-        """Get the cached NFL data snapshot from the main NFL board."""
-        return getattr(self.data, "nfl_board_snapshot", None)
+        """Get the shared NFL data snapshot (works independently of NFLBoard)."""
+        return self.data_manager.get_snapshot()
 
     def _calculate_contrast_ratio(self, color1: tuple, color2: tuple) -> float:
         """
@@ -240,12 +259,12 @@ class NFLStandingsBoard(BoardBase):
         """
         Render the NFL standings board with scrolling if needed.
         Cycles through all configured divisions/conferences.
-        Uses cached data from the main NFL board snapshot.
+        Uses shared data manager (works independently).
         """
-        # Check if we have cached data available
+        # Check if we have data available
         snapshot = self._get_snapshot()
         if not snapshot or not snapshot.all_teams:
-            debug.warning("NFL Standings Board: No NFL data available - NFL board may not be initialized")
+            debug.warning("NFL Standings Board: No NFL data available")
             self.matrix.clear()
             self.matrix.draw_text((0, 0), "No NFL Data", font=self.font, fill=(255, 255, 255))
             self.matrix.render()
@@ -433,3 +452,14 @@ class NFLStandingsBoard(BoardBase):
 
         # Show bottom for a moment
         self.sleepEvent.wait(self.display_seconds)
+
+    def cleanup(self):
+        """Clean up resources when board is unloaded."""
+        debug.info("NFL Standings Board: Cleaning up resources")
+
+        # Release data manager reference (only stops scheduler when last reference is released)
+        NFLDataManager.release_instance()
+
+        # Call parent cleanup
+        super().cleanup()
+        debug.info("NFL Standings Board: Cleanup complete")
