@@ -7,21 +7,22 @@
 
   "boards": [
     {
-      "id": "nfl_board",
-      "class_name": "NFLBoard",
-      "module": "board",
-      "deprecated": true,
-      "deprecated_message": "Use 'nfl_team_summary' instead. 'nfl_board' is kept for backward compatibility."
-    },
-    {
       "id": "nfl_team_summary",
       "class_name": "NFLTeamSummaryBoard",
-      "module": "nfl_team_summary"
+      "module": "nfl_team_summary",
+      "description": "Shows team info, record, next/last games (no live game ticker)"
+    },
+    {
+      "id": "nfl_game_ticker",
+      "class_name": "NFLGameTickerBoard",
+      "module": "nfl_game_ticker",
+      "description": "Shows live, upcoming, and completed games in ticker style"
     },
     {
       "id": "nfl_standings",
       "class_name": "NFLStandingsBoard",
-      "module": "nfl_standings_board"
+      "module": "nfl_standings_board",
+      "description": "Shows NFL division and conference standings"
     }
   ],
 

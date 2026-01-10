@@ -1,11 +1,810 @@
 """
-NFL Team Summary Board
-This is an alias for NFLBoard to support the new naming convention.
-The old 'nfl_board' name continues to work for backward compatibility.
+NFL Board - Clean Implementation
+Displays NFL games and team information using clear, readable logic.
 """
 
-# Import the original NFLBoard class with a new name
-from .board import NFLBoard as NFLTeamSummaryBoard
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
-# Re-export for use by the plugin system
-__all__ = ['NFLTeamSummaryBoard']
+from boards.base_board import BoardBase
+from PIL import Image
+from utils import get_file
+
+from . import __board_name__, __description__, __version__
+from .data import NFLDataManager, NFLDataSnapshot, NFLGame, NFLTeam
+from .logos import NFLLogoManager
+
+debug = logging.getLogger("scoreboard")
+
+# NFL games are scheduled in US Eastern Time
+NFL_TIMEZONE = ZoneInfo("America/New_York")
+
+
+class NFLTeamSummaryConfig:
+    """
+    Handles NFL Team Summary board configuration with validation and sensible defaults.
+    This board shows team information only (no live game ticker).
+    Use nfl_game_ticker for game displays.
+    """
+
+    def __init__(self, config_data: dict):
+        # Team configuration - must have at least one team
+        self.team_ids = self._parse_team_ids(config_data.get("team_ids", []))
+        if not self.team_ids:
+            raise ValueError("NFL Board requires at least one team_id in configuration")
+
+        # Display timing settings
+        self.display_seconds = int(config_data.get("display_seconds", 8))
+        self.refresh_seconds = int(config_data.get("refresh_seconds", 300))
+
+        # Cache configuration - default to same as refresh_seconds
+        self.cache_expiration_seconds = int(config_data.get("cache_expiration_seconds", self.refresh_seconds))
+
+        debug.info(f"NFL Team Summary: Configured for teams {self.team_ids}")
+        debug.info(f"NFL Team Summary: Display duration = {self.display_seconds}s")
+        debug.info(f"NFL Team Summary: Refresh interval = {self.refresh_seconds}s")
+
+    def _parse_team_ids(self, team_ids_config) -> List[str]:
+        """Parse team IDs from configuration, handling single string or list."""
+        if isinstance(team_ids_config, str):
+            team_ids_config = [team_ids_config]
+
+        if not isinstance(team_ids_config, list):
+            return []
+
+        # Convert all to strings and filter out empty ones
+        parsed_ids = [str(tid).strip() for tid in team_ids_config if str(tid).strip()]
+        return parsed_ids
+
+
+class NFLTeamSummaryBoard(BoardBase):
+    """
+    NFL Team Summary Board - displays team information, records, and next/last games.
+
+    NOTE: This board shows ONLY team summaries. For live game tickers, use nfl_game_ticker.
+    For standings, use nfl_standings.
+    """
+
+    def __init__(self, data, matrix, sleepEvent):
+        super().__init__(data, matrix, sleepEvent)
+
+        # Board metadata
+        self.board_name = __board_name__
+        self.board_version = __version__
+        self.board_description = __description__
+
+        # Initialize configuration with validation
+        try:
+            self.config = NFLTeamSummaryConfig(self.board_config)
+        except ValueError as error:
+            debug.error(f"NFL Board configuration error: {error}")
+            raise
+
+        # Initialize shared data manager (singleton pattern)
+        # If NFLStandingsBoard is also enabled, they'll share the same instance
+        data_manager_config = {
+            "refresh_seconds": self.config.refresh_seconds,
+            "cache_expiration_seconds": self.config.cache_expiration_seconds,
+            "team_ids": self.config.team_ids
+        }
+        self.data_manager = NFLDataManager.get_instance(self.data, data_manager_config)
+
+        # Ensure data is loaded (from cache or API)
+        self.data_manager.ensure_data_loaded()
+
+        # Start the refresh scheduler if not already running
+        if hasattr(self.data, 'scheduler') and self.data.scheduler:
+            self.data_manager.start_refresh_scheduler(self.data.scheduler)
+            debug.info(f"NFL Board: Data refresh scheduler running (every {self.config.refresh_seconds}s)")
+
+        # Initialize logo manager
+        logo_cache_dir = (
+            self._get_board_directory() / "assets/logos/nfl"
+            if hasattr(self, '_get_board_directory')
+            else None
+        )
+        self.logo_manager = NFLLogoManager(logo_cache_dir)
+
+        # Display state management - unified approach
+        self.current_display_items = []  # Unified list of games and team summaries
+
+        # Logo caching for performance
+        self.logo_cache: Dict[str, Image.Image] = {}
+
+        # Load logo positioning offsets if they exist
+        self.logo_offsets = self._load_logo_offsets()
+
+        # Gradient used for board
+        self.gradient = self._load_gradient()
+
+        debug.info("NFL Board: Initialization complete")
+
+    def render(self):
+        """
+        Main render method called by the board system.
+        Handles data refresh timing and delegates to appropriate render methods.
+        """
+        debug.debug("NFL Board: render() method called")
+
+        try:
+            # Update display games from current snapshot data
+            debug.debug("NFL Board: Refreshing display games")
+            self._refresh_display_games()
+
+            debug.debug(f"NFL Board: Have {len(self.current_display_items)} total items to display")
+
+            # Check if we have anything to display
+            if not self.current_display_items:
+                debug.debug("NFL Board: No content available, rendering message")
+                self._render_no_content_available()
+                return
+
+            # Loop through all team summaries and display each one
+            for team in self.current_display_items:
+                # Check for sleep event interruption before each team
+                if self.sleepEvent.is_set():
+                    debug.debug("NFL Team Summary: Sleep event set, interrupting display loop")
+                    break
+
+                self._render_team_summary(team)
+
+        except Exception as error:
+            debug.error(f"NFL Board render error: {error}")
+            self._render_error_display(str(error))
+
+    def _get_snapshot(self) -> Optional[NFLDataSnapshot]:
+        """Get the shared NFL data snapshot."""
+        return self.data_manager.get_snapshot()
+
+    # Legacy methods - now handled by NFLDataManager but kept for backward compatibility
+    def _load_snapshot_from_cache(self) -> bool:
+        """
+        DEPRECATED: Now handled by NFLDataManager.
+        Kept for backward compatibility.
+        """
+        return self.data_manager._load_snapshot_from_cache()
+
+    def _dict_to_team(self, team_dict: dict) -> Optional[NFLTeam]:
+        """
+        DEPRECATED: Now handled by NFLDataManager's API client.
+        Kept for backward compatibility.
+        """
+        return self.data_manager.api_client._dict_to_team(team_dict)
+
+    def _dict_to_game(self, game_dict: dict) -> Optional[NFLGame]:
+        """
+        DEPRECATED: Now handled by NFLDataManager's API client.
+        Kept for backward compatibility.
+        """
+        return self.data_manager.api_client._dict_to_game(game_dict)
+
+    def _perform_data_refresh(self):
+        """
+        DEPRECATED: Now handled by NFLDataManager.
+        Kept for backward compatibility.
+        """
+        self.data_manager._perform_data_refresh()
+
+
+    def _refresh_display_games(self):
+        """Update the list of team summaries to display (simplified - teams only, no games)."""
+        snapshot = self._get_snapshot()
+        if not self._is_snapshot_valid(snapshot):
+            debug.warning("NFL Team Summary: No valid data snapshot available")
+            self.current_display_items = []
+            return
+
+        # Build list of teams to show summaries for (all configured teams)
+        teams_for_summaries = []
+        for team_id in self.config.team_ids:
+            if team_id in snapshot.favorite_teams:
+                teams_for_summaries.append(snapshot.favorite_teams[team_id])
+            elif team_id in snapshot.all_teams:
+                teams_for_summaries.append(snapshot.all_teams[team_id])
+
+        self.current_display_items = teams_for_summaries
+
+        debug.debug(f"NFL Team Summary: {len(teams_for_summaries)} team(s) to display")
+
+    def _is_snapshot_valid(self, snapshot: 'NFLDataSnapshot') -> bool:
+        """Check if snapshot has valid data."""
+        return snapshot and not snapshot.error_message and bool(snapshot.all_teams)
+
+    def _render_team_summary(self, team: NFLTeam):
+        """Render team summary display showing team info, record, next/last games."""
+        debug.debug(f"NFL Board: Rendering team summary for {team.display_name}")
+        debug.debug(f"NFL Board: Team record: {team.record_text} (detailed: {team.has_detailed_record})")
+        debug.debug(f"NFL Board: Team colors: {team.color_primary}, {team.color_secondary}")
+
+        if not team.has_detailed_record:
+            debug.warning(f"NFL Board: Team {team.display_name} using basic data - detailed record not loaded")
+
+        layout = self.get_board_layout('nfl_team_summary')
+
+        if not layout:
+            debug.warning("NFL Board: No team summary layout found, using fallback")
+            self._render_fallback_team_summary(team)
+            return
+
+        # Check if content needs scrolling (64x32 displays)
+        if self.matrix.height <= 32:
+            self._render_team_summary_scrolling(team, layout)
+        else:
+            self._render_team_summary_static(team, layout)
+
+    def _render_team_summary_static(self, team: NFLTeam, layout):
+        """Render team summary for larger displays (128x64) - no scrolling needed."""
+        debug.debug("NFL Board: Using static team summary layout")
+
+        self.matrix.clear()
+
+        # Get team's schedule data for next/last game info
+        snapshot = self._get_snapshot()
+        team_schedule = []
+        if snapshot and team.team_id in snapshot.team_schedules:
+            team_schedule = snapshot.team_schedules[team.team_id]
+
+        # Render team logo
+        if hasattr(layout, 'team_logo'):
+            team_logo = self._get_team_logo(team)
+            if team_logo:
+                self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+
+        # Render gradient - after logos but before other visuals
+        self.matrix.draw_image([self.matrix.width/3,0], self.gradient, align="center")
+
+        # Render team name with team colors
+        if hasattr(layout, 'team_name'):
+            self.matrix.draw_text_layout(
+                layout.team_name,
+                team.display_name,
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+
+        # Render record
+        if hasattr(layout, 'record_header'):
+            debug.debug("NFL Board: Rendering record header")
+            self.matrix.draw_text_layout(
+                layout.record_header,
+                "RECORD:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+        if hasattr(layout, 'record'):
+            debug.debug(f"NFL Board: Rendering record: {team.record_text}")
+            self._draw_text(layout, "record", team.record_text)
+        if hasattr(layout, 'record_comment') and team.record_comment:
+            debug.debug(f"NFL Board: Rendering record comment: {team.record_comment}")
+            self._draw_text(layout, "record_comment", team.record_comment.upper())
+
+        # Render next game section
+        next_game = self._get_next_game_for_team(team.team_id, team_schedule)
+        if hasattr(layout, 'next_game_header'):
+            self.matrix.draw_text_layout(
+                layout.next_game_header,
+                "NEXT GAME:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+
+        date = self._format_game_datetime(next_game, format_type="date_only")
+        time = self._format_game_datetime(next_game, format_type="time_only")
+        opponent = self._format_next_game_display(next_game, team.team_id).get("opponent_text", "").upper()
+
+        if hasattr(layout, 'next_game_line_1'):
+            self.matrix.draw_text_layout(layout.next_game_line_1, date.upper())
+        if hasattr(layout, 'next_game_line_2'):
+            self.matrix.draw_text_layout(layout.next_game_line_2, f"{time.upper()} {opponent.upper()}")
+
+        # Render last game information
+        last_game = self._get_last_game_for_team(team.team_id, team_schedule)
+        last_game_results = self._format_last_game_display(last_game, team.team_id)
+        if hasattr(layout, 'last_game_header'):
+            self.matrix.draw_text_layout(
+                layout.last_game_header,
+                "LAST GAME:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+        if hasattr(layout, 'last_game_result'):
+            result = last_game_results.get("result", "")
+            if result == "W":
+                fillColor = (50, 255, 50)  # Green for win
+            elif result == "L":
+                fillColor = (255, 50, 50)  # Red for loss
+            else:
+                fillColor = (200, 200, 50)  # Yellow for tie
+            self.matrix.draw_text_layout(layout.last_game_result, result.upper(),fillColor=fillColor)
+        if hasattr(layout, 'last_game_text'):
+            last_game_text = f"{last_game_results.get('score', '')} {last_game_results.get('opponent', '')}".strip()
+            self.matrix.draw_text_layout(layout.last_game_text, last_game_text.upper())
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_team_summary_scrolling(self, team: NFLTeam, layout):
+        """Render team summary with scrolling for small displays (64x32)."""
+        debug.debug("NFL Board: Using scrolling team summary layout for 64x32")
+
+        # Get team's schedule data
+        snapshot = self._get_snapshot()
+        team_schedule = []
+        if snapshot and team.team_id in snapshot.team_schedules:
+            team_schedule = snapshot.team_schedules[team.team_id]
+
+        # Create offscreen buffer for scrolling content
+        content_height = 80
+        buffer = self.matrix.create_offscreen_buffer(height=content_height)
+
+        # Render record section
+        if hasattr(layout, 'record_header'):
+            buffer.draw_text_layout(
+                layout.record_header,
+                "RECORD:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+        if hasattr(layout, 'record'):
+            buffer.draw_text_layout(layout.record, team.record_text)
+        if hasattr(layout, 'record_comment_line_1') and team.record_comment:
+            parts = team.record_comment.split(" ", 2)
+            if len(parts) >= 3:
+                line1 = " ".join(parts[:2]).upper()
+                line2 = parts[2].upper()
+            else:
+                line1 = team.record_comment.upper()
+                line2 = "---"
+            buffer.draw_text_layout(layout.record_comment_line_1, line1)
+            buffer.draw_text_layout(layout.record_comment_line_2, line2)
+
+        # Render next game section
+        next_game = self._get_next_game_for_team(team.team_id, team_schedule)
+        if hasattr(layout, 'next_game_header'):
+            buffer.draw_text_layout(
+                layout.next_game_header,
+                "NEXT GAME:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+
+        date = self._format_game_datetime(next_game, format_type="date_only")
+        time = self._format_game_datetime(next_game, format_type="time_only")
+        opponent = self._format_next_game_display(next_game, team.team_id).get("opponent_text", "").upper()
+
+        if hasattr(layout, 'next_game_line_1'):
+            buffer.draw_text_layout(layout.next_game_line_1, date)
+        if hasattr(layout, 'next_game_line_2'):
+            buffer.draw_text_layout(layout.next_game_line_2, time)
+        if hasattr(layout, 'next_game_line_3'):
+            buffer.draw_text_layout(layout.next_game_line_3, opponent)
+
+        # Render last game section
+        last_game = self._get_last_game_for_team(team.team_id, team_schedule)
+        last_game_results = self._format_last_game_display(last_game, team.team_id)
+        if hasattr(layout, 'last_game_header'):
+            buffer.draw_text_layout(
+                layout.last_game_header,
+                "LAST GAME:",
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+        if hasattr(layout, 'last_game_result'):
+            result = last_game_results.get("result", "")
+            if result == "W":
+                fillColor = (50, 255, 50)
+            elif result == "L":
+                fillColor = (255, 50, 50)
+            else:
+                fillColor = (200, 200, 50)
+            buffer.draw_text_layout(layout.last_game_result, result.upper(), fillColor=fillColor)
+            buffer.draw_text_layout(layout.last_game_score, last_game_results.get('score', '').upper())
+        if hasattr(layout, 'last_game_text'):
+            buffer.draw_text_layout(layout.last_game_text, last_game_results.get('opponent', '').upper())
+
+        # Get the rendered image from buffer
+        scrolling_image = buffer.get_image()
+        bbox = scrolling_image.getbbox()
+        scrolling_image = scrolling_image.crop(bbox)
+        content_height = scrolling_image.height
+
+        # Scroll the image
+        y_offset = 0
+
+        # Show top of content
+        self.matrix.clear()
+
+        # Render team logo
+        if hasattr(layout, 'team_logo'):
+            team_logo = self._get_team_logo(team)
+            if team_logo:
+                self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+                # Render gradient - after logos but before other visuals
+                if hasattr(layout, 'gradient'):
+                    self.matrix.draw_image_layout(layout.gradient, self.gradient)
+
+        self.matrix.draw_image((0, y_offset), scrolling_image)
+        self.matrix.render()
+        self.sleepEvent.wait(2)  # Hold at top for 2 seconds
+
+        # Scroll down until bottom is visible
+        while y_offset > -(content_height - self.matrix.height) and not self.sleepEvent.is_set():
+            y_offset -= 1
+            self.matrix.clear()
+            # Render team logo
+            if hasattr(layout, 'team_logo'):
+                team_logo = self._get_team_logo(team)
+                if team_logo:
+                    self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+                    # Render gradient - after logos but before other visuals
+                    if hasattr(layout, 'gradient'):
+                        self.matrix.draw_image_layout(layout.gradient, self.gradient)
+            self.matrix.draw_image((0, y_offset), scrolling_image)
+            self.matrix.render()
+            self.sleepEvent.wait(0.15)  # Scroll speed
+
+        # Hold at bottom
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_no_content_available(self):
+        """Render display when no games or team summaries are available."""
+        debug.debug("NFL Board: Rendering no content available message")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl_game')
+
+        if layout and hasattr(layout, 'game_status'):
+            self.matrix.draw_text_layout(layout.game_status, "No NFL Content")
+        else:
+            # Fallback to centered text
+            font = self.data.config.layout.font
+            self.matrix.draw_text_centered(self.display_height // 2, "No NFL Content", font)
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_error_display(self, error_message: str):
+        """Render error message display."""
+        debug.debug(f"NFL Board: Rendering error display: {error_message}")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl')
+
+        if layout and hasattr(layout, 'game_status'):
+            self.matrix.draw_text_layout(layout.game_status, "NFL Error")
+        else:
+            # Fallback to centered text
+            font = self.data.config.layout.font
+            self.matrix.draw_text_centered(self.display_height // 2, "NFL Error", font)
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _get_team_logo(self, team: NFLTeam) -> Optional[Image.Image]:
+        """Get team logo image with caching and automatic downloading."""
+        cache_key = f"{team.abbreviation}_logo"
+
+        if cache_key in self.logo_cache:
+            return self.logo_cache[cache_key]
+
+        try:
+            # Use the logo manager for logo path resolution and download functionality
+            logo_path = self.logo_manager.get_team_logo_path(team, size=128, download_if_missing=True)
+
+            if logo_path and logo_path.exists():
+                logo_image = Image.open(logo_path)
+                self.logo_cache[cache_key] = logo_image
+                debug.debug(f"NFL Board: Loaded logo for {team.abbreviation} from {logo_path}")
+                return logo_image
+
+            debug.debug(f"NFL Board: No logo available for {team.abbreviation} (URL: {team.logo_url})")
+
+        except Exception as error:
+            debug.error(f"NFL Board: Failed to load logo for {team.abbreviation}: {error}")
+
+        return None
+
+    def _draw_logo(self, layout, element_name: str, logo: Image, team_abbreviation: str, canvas=None) -> None:
+        """
+        Draw a team logo using element-specific offsets.
+
+        Args:
+            layout: Layout object containing the logo element
+            element_name: Name of the logo element (also used as offset key)
+            logo_path: Path to the logo image file
+            team_abbreviation: Team abbreviation for offset lookup
+            canvas: Optional canvas to draw on (defaults to main matrix)
+        """
+        if not hasattr(layout, element_name) or not logo:
+            return
+
+        if not canvas:
+            canvas = self.matrix
+
+        # Use element_name as the offset key
+        offsets = self._get_logo_offsets(team_abbreviation, element_name)
+
+        zoom = float(offsets.get("zoom", 1.0))
+        offset_x, offset_y = offsets.get("offset", (0, 0))
+
+        # Scale logo to appropriate size
+        max_dimension = 64 if self.matrix.height >= 48 else min(32, self.matrix.height)
+
+        if max(logo.size) > max_dimension:
+            logo.thumbnail((max_dimension, max_dimension), self._thumbnail_filter())
+
+        # Apply zoom if needed
+        if zoom != 1.0:
+            w, h = logo.size
+            zoomed = logo.resize(
+                (max(1, int(round(w * zoom))), max(1, int(round(h * zoom)))),
+                self._thumbnail_filter(),
+            )
+            logo = zoomed
+
+        # Apply offset to layout element
+        element = getattr(layout, element_name).__copy__()
+        x, y = element.position
+        element.position = (x + offset_x, y + offset_y)
+
+        canvas.draw_image_layout(element, logo)
+
+    @staticmethod
+    def _thumbnail_filter():
+        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", None)
+        if resampling is None:
+            resampling = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
+        return resampling
+
+    def _get_logo_offsets(self, team_abbreviation: str, element_name: str) -> dict:
+        """Get logo offsets for a team and element, with fallback hierarchy."""
+        team_offsets = self.logo_offsets.get(team_abbreviation.upper())
+
+        if isinstance(team_offsets, dict):
+            # Check for element-specific offset (e.g., "home_team_logo", "team_logo")
+            if element_name in team_offsets:
+                return team_offsets[element_name]
+            # Fall back to team default
+            if "_default" in team_offsets:
+                return team_offsets["_default"]
+
+        # Fall back to global default
+        return self.logo_offsets.get("_default", {"zoom": 1.0, "offset": (0, 0)})
+
+    def _load_logo_offsets(self) -> Dict[str, Dict[str, any]]:
+        """Load logo positioning offsets from configuration file."""
+        try:
+            offsets_path = self._get_board_directory() / "logo_offsets.json"
+
+            if offsets_path.exists():
+                with offsets_path.open() as file:
+                    raw_offsets = json.load(file)
+
+                # Process offsets with defaults
+                default_offset = raw_offsets.get("_default", {"zoom": 1.0, "offset": (0, 0)})
+                processed_offsets = {}
+
+                for key, value in raw_offsets.items():
+                    if key != "_default":
+                        processed_offsets[key.upper()] = {**default_offset, **value}
+
+                processed_offsets["_default"] = default_offset
+                return processed_offsets
+
+        except Exception as error:
+            debug.error(f"NFL Board: Failed to load image offsets: {error}")
+
+        return {"_default": {"zoom": 1.0, "offset": (0, 0)}}
+
+    def _format_game_datetime(self, game: Optional[NFLGame], format_type: str = "full") -> str:
+        """Format game date and time for display."""
+        if not game or not game.date:
+            return "TBD"
+        local_dt = game.date.astimezone()
+
+        if format_type == "time_only":
+            hour = local_dt.hour % 12 or 12
+            minute = local_dt.minute
+            ampm = "AM" if local_dt.hour < 12 else "PM"
+            return f"{hour}:{minute:02d} {ampm}"
+        elif format_type == "date_only":
+            return f"{local_dt.strftime('%a')} {local_dt.month}/{local_dt.day}"
+        elif format_type == "short":
+            hour = local_dt.hour % 12 or 12
+            minute = local_dt.minute
+            ampm = "AM" if local_dt.hour < 12 else "PM"
+            return f"{local_dt.month}/{local_dt.day} {hour}:{minute:02d} {ampm}"
+        else:  # "full" (default)
+            weekday = local_dt.strftime("%a")
+            hour = local_dt.hour % 12 or 12
+            minute = local_dt.minute
+            ampm = "AM" if local_dt.hour < 12 else "PM"
+            return f"{weekday} {local_dt.month}/{local_dt.day} {hour}:{minute:02d} {ampm}"
+
+    def _get_next_game_for_team(self, team_id: str, team_schedule: List[NFLGame]) -> Optional[NFLGame]:
+        """Find the next upcoming game for a specific team."""
+        now = datetime.now(timezone.utc)  # Make timezone-aware
+        upcoming_games = []
+
+        for game in team_schedule:
+            if (game.involves_team(team_id) and
+                game.date and
+                game.date > now and
+                not game.is_final):
+                upcoming_games.append(game)
+
+        if upcoming_games:
+            # Sort by date and return the earliest
+            upcoming_games.sort(key=lambda g: g.date or datetime.max.replace(tzinfo=timezone.utc))
+            return upcoming_games[0]
+
+        return None
+
+    def _get_last_game_for_team(self, team_id: str, team_schedule: List[NFLGame]) -> Optional[NFLGame]:
+        """Find the most recent completed game for a specific team."""
+        now = datetime.now(timezone.utc)  # Make timezone-aware
+        completed_games = []
+
+        for game in team_schedule:
+            if (game.involves_team(team_id) and
+                game.date and
+                game.date < now and
+                game.is_final):
+                completed_games.append(game)
+
+        if completed_games:
+            # Sort by date and return the most recent
+            completed_games.sort(key=lambda g: g.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            return completed_games[0]
+
+        return None
+
+    def _format_next_game_display(self, game: Optional[NFLGame], team_id: str) -> dict:
+        """Format next game information for display."""
+        if not game:
+            return {
+                "game_time": "",
+                "opponent_text": ""
+            }
+
+        opponent = game.get_opposing_team(team_id)
+        if not opponent:
+            return {
+                "game_time": "",
+                "opponent_text": "TBD"
+            }
+
+        game_time = self._format_game_datetime(game)
+
+        # Determine if home or away
+        if game.home_team.team_id == team_id:
+            opponent_text = f"vs {opponent.abbreviation}"
+        else:
+            opponent_text = f"@ {opponent.abbreviation}"
+
+        return {
+            "game_time": game_time,
+            "opponent_text": opponent_text
+        }
+        # SUN 10/4 1:00 PM VS BUF
+        #return f"{game_time} {opponent_text}".upper()
+
+    def _format_last_game_display(self, game: Optional[NFLGame], team_id: str) -> dict:
+        """Format last game result for display."""
+        if not game:
+            return {
+                "result": "",
+                "score": "",
+                "opponent": ""
+            }
+
+        opponent = game.get_opposing_team(team_id)
+        if not opponent:
+            return {
+                "result": "",
+                "score": "",
+                "opponent": "TBD"
+            }
+
+        # Determine result and format
+        if game.home_team.team_id == team_id:
+            team_score = game.home_score
+            opponent_score = game.away_score
+            opponent_text = f"VS {opponent.abbreviation}"
+        else:
+            team_score = game.away_score
+            opponent_score = game.home_score
+            opponent_text = f"AT {opponent.abbreviation}"
+
+        # Format result
+        if team_score > opponent_score:
+            result = "W"
+        elif team_score < opponent_score:
+            result = "L"
+        else:
+            result = "T"
+
+        # return dictionary with components for layout
+        return {
+            "result": result,
+            "score": f"{team_score}-{opponent_score}",
+            "opponent": opponent_text
+        }
+
+    def _render_fallback_team_summary(self, team: NFLTeam):
+        """Render team summary when no layout is available."""
+        debug.debug(f"NFL Board: Rendering fallback team summary for {team.display_name}")
+
+        font = self.data.config.layout.font
+        debug.debug(f"NFL Board: Using font: {font}")
+
+        # Simple text display
+        debug.debug("NFL Board: Drawing team name")
+        self.matrix.draw_text_centered(10, team.display_name, font)
+
+        debug.debug(f"NFL Board: Drawing record: {team.record_text}")
+        self.matrix.draw_text_centered(25, f"Record: {team.record_text}", font)
+
+        debug.debug("NFL Board: Drawing summary label")
+        self.matrix.draw_text_centered(40, "Team Summary", font)
+
+        debug.debug("NFL Board: Calling matrix.render()")
+        # Render to the display
+        self.matrix.render()
+
+        debug.debug(f"NFL Board: Waiting {self.config.display_seconds} seconds")
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+        debug.debug("NFL Board: Fallback team summary complete")
+
+    def _draw_text(self, layout, element_name: str, text: str) -> None:
+        """
+        Helper method to draw text on layout elements, similar to old implementation.
+        """
+        if hasattr(layout, element_name):
+            element = getattr(layout, element_name)
+            self.matrix.draw_text_layout(element, text)
+
+    def _load_gradient(self) -> Image.Image:
+        """Load appropriate gradient image for current matrix size."""
+        if self.matrix.height >= 48:
+            return Image.open(get_file('assets/images/128x64_scoreboard_center_gradient.png'))
+        else:
+            return Image.open(get_file('assets/images/64x32_scoreboard_center_gradient.png'))
+
+    def _get_board_directory(self) -> Path:
+        """Get the directory path for this board plugin."""
+        return Path(__file__).parent
+
+    def cleanup(self):
+        """Clean up resources when board is unloaded."""
+        debug.info("NFL Board: Cleaning up resources")
+
+        # Release data manager reference (only stops scheduler when last reference is released)
+        NFLDataManager.release_instance()
+
+        # Clear caches and display state
+        self.logo_cache.clear()
+        self.current_display_items.clear()
+
+        # Call parent cleanup to automatically remove scheduled jobs
+        super().cleanup()
+        debug.info("NFL Board: Cleanup complete")
+
+
+# Export for use by the plugin system
+__all__ = ['NFLTeamSummaryBoard', 'NFLTeamSummaryConfig']
