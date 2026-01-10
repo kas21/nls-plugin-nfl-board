@@ -1,6 +1,6 @@
 # NFL Board Plugin
 
-A NFL scoreboard plugin for the [NHL LED Scoreboard](https://github.com/falkyre/nhl-led-scoreboard) that shows live games, scores, team information, schedules, and standings for your favorite NFL teams.
+A comprehensive NFL plugin for the [NHL LED Scoreboard](https://github.com/falkyre/nhl-led-scoreboard) with three independent boards for displaying live games, team information, and standings for your favorite NFL teams.
 
 ![NFL Team Summary 128x64 - Washington](assets/images/nfl_board_team_summary_128_wsh.jpg)
 
@@ -10,6 +10,7 @@ A NFL scoreboard plugin for the [NHL LED Scoreboard](https://github.com/falkyre/
 
 - [Features](#features)
 - [Installation](#installation)
+- [Board Overview](#board-overview)
 - [Configuration](#configuration)
 - [Display Modes](#display-modes)
 - [Layouts](#layouts)
@@ -19,16 +20,17 @@ A NFL scoreboard plugin for the [NHL LED Scoreboard](https://github.com/falkyre/
 
 ## Features
 
-- **Live Game Display**: Real-time scores and game status for ongoing NFL games
+- **Three Independent Boards**: Team summaries, live game ticker, and standings - use any combination
+- **Live Game Ticker**: Real-time scores and game status for ongoing NFL games
 - **Game Schedules**: Shows upcoming games with dates and times
 - **Completed Games**: Displays final scores for finished games
 - **Team Summaries**: Shows team records, next game, and last game results
-- **Standings Board**: Display current NFL standings by division or conference with team-colored backgrounds
+- **Standings Display**: Current NFL standings by division or conference with team-colored backgrounds
 - **Multi-Team Support**: Track multiple favorite teams simultaneously
 - **Flexible Display Options**: Show only your favorite team's games or all NFL games happening today
 - **Team Logos**: Automatic logo downloading and caching with customizable positioning
 - **LED Matrix Sizes**: Supports both 64x32 and 128x64 matrix sizes
-- **Smart Caching**: Stale-while-revalidate caching for improved performance and resilience
+- **Smart Caching**: Shared data manager with intelligent caching for improved performance and resilience
 
 ## Installation
 
@@ -40,17 +42,18 @@ or
 
 `python plugins.py add https://github.com/kas21/nls-plugin-nfl-board.git`
 
-After the plugin is installed, add `nfl_board` and/or `nfl_standings` to your NHL-LED-Scoreboard's main configuration:
+After the plugin is installed, add the NFL boards you want to your NHL-LED-Scoreboard's main configuration:
 
 `nano config/config.json`
 
-For example, to add both boards to the off day rotation:
+For example, to add all three boards to the off day rotation:
 
 ```json
 "states": {
     "off_day": [
         "season_countdown",
-        "nfl_board",
+        "nfl_team_summary",
+        "nfl_game_ticker",
         "nfl_standings",
         "team_summary",
         "scoreticker",
@@ -59,9 +62,49 @@ For example, to add both boards to the off day rotation:
 }
 ```
 
-**Important:** The `nfl_standings` board **requires** the `nfl_board` to be enabled. The main NFL board handles all data loading, caching, and scheduled refreshes. The standings board reads from the shared data snapshot created by the main board. You cannot use `nfl_standings` alone.
+**Note:** All three boards are now **fully independent** - you can use any combination you want. They share data efficiently through a common data manager.
 
 **Note:** You must restart the scoreboard for changes to take effect.
+
+## Board Overview
+
+This plugin provides three independent boards that can be used together or separately:
+
+### 1. NFL Team Summary (`nfl_team_summary`)
+
+Displays detailed information about your favorite teams:
+
+- Team logo and name with team colors
+- Season record (wins-losses-ties)
+- Record comment (division standing, playoff seed, etc.)
+- Next scheduled game (date, time, opponent)
+- Last game result (W/L, score, opponent)
+
+**Best for:** Following specific teams and their season progress
+
+### 2. NFL Game Ticker (`nfl_game_ticker`)
+
+Shows live and upcoming games in a scrolling ticker format:
+
+- Live games with real-time scores and game clock
+- Upcoming games with date and time
+- Completed games with final scores
+- Option to show all games or just your favorite teams
+
+**Best for:** Tracking live game action across the league
+
+### 3. NFL Standings (`nfl_standings`)
+
+Displays current standings with team-colored backgrounds:
+
+- Division or conference view
+- Win-loss records and win percentage
+- Team-colored backgrounds with smart contrast
+- Automatic scrolling for larger divisions
+
+**Best for:** Monitoring playoff race and division rankings
+
+All boards share the same data source through an efficient caching system, so enabling multiple boards doesn't increase API load.
 
 ## Configuration
 
@@ -75,36 +118,27 @@ nano config.json
 
 **Note:** You must restart the scoreboard for changes to take effect.
 
-### Example Configuration
+**Important:** All three boards share the same `config.json` file in the plugin directory. The configuration is a **flat structure** (not nested), and all boards read from the same config file.
 
-```json
-{
-    "team_ids": ["28", "2"],
-    "display_seconds": 5,
-    "refresh_seconds": 180,
-    "show_all_games": true,
-    "show_previous_games_until": "09:00",
-    "enabled": true,
-    "division": "NFC East",
-    "display_type": "division",
-    "scroll_speed": 0.2,
-    "use_large_font": true,
-    "disable_win_pct": false
-}
-```
+### Configuration Options
 
-### NFL Board Configuration Options
+All options are specified at the top level of the config file:
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `team_ids` | Array/String | Required | NFL team IDs to follow (see Team IDs section) |
-| `display_seconds` | Integer | 8 | Seconds to display each screen |
-| `refresh_seconds` | Integer | 300 | Seconds between data refreshes |
-| `show_all_games` | Boolean | false | Show all NFL games, not just favorite teams |
-| `show_previous_games_until` | String | "06:00" | Time (HH:MM) until which to show previous day's games |
-| `enabled` | Boolean | true | Enable/disable the board (currently not functional) |
+| Option | Type | Default | Used By | Description |
+|--------|------|---------|---------|-------------|
+| `team_ids` | Array/String | Required | All boards | NFL team IDs to follow (see Team IDs section below) |
+| `refresh_seconds` | Integer | 300 | All boards | Seconds between data refreshes from ESPN API |
+| `cache_expiration_seconds` | Integer | 300 | All boards | How long to keep cached data before considering it stale |
+| `display_seconds` | Integer | 8 | Team Summary, Game Ticker | Seconds to display each screen |
+| `show_all_games` | Boolean | false | Game Ticker | Show all NFL games, not just favorite teams |
+| `show_previous_games_until` | String | "06:00" | Game Ticker | Time (HH:MM) until which to show previous day's games |
+| `division` | String or Array | "NFC East" | Standings | Division/conference name(s) to display |
+| `display_type` | String | "division" | Standings | Display mode: "division" or "conference" |
+| `scroll_speed` | Float | 0.2 | Standings | Speed of scrolling for long standings lists (pixels per frame) |
+| `use_large_font` | Boolean | true | Standings | Use larger font for standings (recommended for 128x64 displays) |
+| `disable_win_pct` | Boolean | false | Standings | Disable displaying win percentage, showing only team records |
 
-**Note:** Cache expiration times are set based on data type:
+**Note:** Cache expiration times are intelligently managed based on data type:
 
 - **Team data** (logos, colors, names): 24 hours - rarely changes
 - **Schedules**: 12 hours - rarely changes but just in case
@@ -115,17 +149,24 @@ nano config.json
   - All games completed: 12 hours - final scores don't change
   - All games far in future: 1 hour - game times stable
 
-### NFL Standings Board Configuration Options
+### Complete Configuration Example
 
-**Dependency:** This board requires `nfl_board` to be enabled. It reads data from the shared snapshot created by the main NFL board.
+Here's a complete example with all options (works for all three boards):
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `division` | String or Array | "NFC East" | Division/conference name(s) to display. Can be a single string or array for multiple divisions |
-| `display_type` | String | "division" | Display mode: "division" or "conference" |
-| `scroll_speed` | Float | 0.2 | Speed of scrolling for long standings lists (pixels per frame) |
-| `use_large_font` | Boolean | true | Use larger font for standings (recommended for 128x64 displays) |
-| `disable_win_pct` | Boolean | false | Disable displaying win percentage, showing only team records |
+```json
+{
+    "team_ids": ["28", "2"],
+    "display_seconds": 5,
+    "refresh_seconds": 120,
+    "show_all_games": true,
+    "show_previous_games_until": "09:00",
+    "division": ["NFC East", "AFC East"],
+    "display_type": "division",
+    "scroll_speed": 0.09,
+    "use_large_font": true,
+    "disable_win_pct": false
+}
+```
 
 #### Division Configuration Examples
 
@@ -205,25 +246,45 @@ Team IDs correspond to ESPN's NFL team identifiers. Common team IDs include:
 
 ## Display Modes
 
-The board intelligently displays different content based on game status:
+### NFL Team Summary Board
 
-### Live/Upcoming/Completed Games
-
-- Team logos VS'
-- Quarter and time remaining or Game date and time
-- Score or Team Record
-
-### Team Summary (when no games scheduled)
+Displays detailed team information:
 
 - Team logo
 - Team name with team colors
-- Season record
-- Next scheduled game
-- Last game result
+- Season record (wins-losses-ties)
+- Record comment (division standing, playoff seed)
+- Next scheduled game (date, time, opponent)
+- Last game result (W/L, score, opponent)
+
+On 64x32 displays, content scrolls vertically to show all information.
+
+### NFL Game Ticker Board
+
+Shows games based on status:
+
+**Live Games:**
+
+- Team logos
+- Current score
+- Quarter and time remaining
+- Highlighted with live indicator
+
+**Upcoming Games:**
+
+- Team logos
+- Team records
+- Game date and time
+
+**Completed Games:**
+
+- Team logos
+- Final score
+- Game result indicator
 
 ### NFL Standings Board
 
-The standings board displays current NFL standings with the following features:
+Displays current NFL standings with the following features:
 
 - **Division View**: Shows all teams in a specific division (e.g., "NFC East", "AFC North")
 - **Conference View**: Shows all teams in a conference (e.g., "NFC", "AFC")
@@ -233,8 +294,6 @@ The standings board displays current NFL standings with the following features:
 - **Automatic Scrolling**: Scrolls smoothly when standings exceed display height
 
 Standings are sorted by wins (descending), losses (ascending), and ties.
-
-**Note:** This board requires the main `nfl_board` to be enabled, as it depends on the shared data snapshot for team information and records.
 
 ## Layouts
 
