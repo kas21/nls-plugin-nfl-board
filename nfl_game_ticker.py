@@ -238,6 +238,12 @@ class NFLGameTickerBoard(BoardBase):
                 if game not in games_to_show:
                     games_to_show.append(game)
 
+        # Include playoff games if the feature is enabled
+        if self.config.show_upcoming_playoff_games and snapshot.playoff_games:
+            for game in snapshot.playoff_games:
+                if game not in games_to_show:
+                    games_to_show.append(game)
+
         # Apply additional filtering for previous games
         filtered_games = [game for game in games_to_show if self.config.should_show_previous_game(game)]
 
