@@ -23,6 +23,14 @@ debug = logging.getLogger("scoreboard")
 # NFL games are scheduled in US Eastern Time
 NFL_TIMEZONE = ZoneInfo("America/New_York")
 
+# Playoff round name mapping
+PLAYOFF_ROUND_NAMES = {
+    1: "Wild Card",
+    2: "Divisional",
+    3: "Conf. Champ.",
+    5: "Super Bowl"
+}
+
 def parse_espn_datetime(value: Optional[str]) -> Optional[datetime]:
     """Parse ESPN datetime strings which typically end with Z."""
     if not value:
@@ -290,6 +298,95 @@ class NFLApiClient:
     def get_current_scoreboard(self) -> List[NFLGame]:
         """Get current/today's games in NFL Eastern Time."""
         return self.get_scoreboard_for_date(datetime.now(NFL_TIMEZONE))
+
+    def get_playoff_scoreboard(self, week: Optional[int] = None) -> tuple:
+        """
+        Get playoff games for specified week or auto-detect current playoff week.
+
+        Args:
+            week: Playoff week (1=Wild Card, 2=Divisional, 3=Conf Champ, 5=Super Bowl)
+                  If None, auto-detects current/upcoming playoff week.
+
+        Returns:
+            Tuple of (games, week_number, round_name)
+        """
+        # Cache key for playoff data
+        cache_key = f"nfl_playoff_week_{week}" if week else "nfl_playoff_current"
+        cached_data = sb_cache.get(cache_key, default=None)
+        if cached_data is not None:
+            debug.debug(f"NFL Board: Using cached playoff data for week {cached_data.get('week')}")
+            games = [self._dict_to_game(g) for g in cached_data['games'] if self._dict_to_game(g)]
+            return (games, cached_data['week'], cached_data['round_name'])
+
+        # If no week specified, detect current playoff week
+        if week is None:
+            week = self._detect_current_playoff_week()
+            if week is None:
+                debug.debug("NFL Board: No active playoff week detected")
+                return ([], 0, "")
+
+        # Fetch from API with seasontype=3 for postseason
+        url = f"{self.base_url}/scoreboard?seasontype=3&week={week}"
+        debug.debug(f"NFL Board: Fetching playoff scoreboard for week {week} from API")
+
+        try:
+            response = httpx.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            games = []
+            for event in data.get("events", []):
+                game = self._parse_game_from_event(event)
+                if game:
+                    games.append(game)
+
+            games.sort(key=lambda g: g.date or datetime.min.replace(tzinfo=timezone.utc))
+            round_name = PLAYOFF_ROUND_NAMES.get(week, f"Playoff Week {week}")
+
+            debug.debug(f"NFL Board: Found {len(games)} playoff games for {round_name}")
+
+            # Cache the results
+            cache_data = {
+                'games': [self._game_to_dict(g) for g in games],
+                'week': week,
+                'round_name': round_name
+            }
+            sb_cache.set(cache_key, cache_data, expire=self.cache_upcoming_game_seconds)
+            debug.debug(f"NFL Board: Cached playoff data for week {week} ({self.cache_upcoming_game_seconds}s expiration)")
+
+            return (games, week, round_name)
+
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to fetch playoff scoreboard: {exc}")
+            return ([], 0, "")
+
+    def _detect_current_playoff_week(self) -> Optional[int]:
+        """Auto-detect current playoff week by finding week with upcoming/live games."""
+        playoff_weeks = [1, 2, 3, 5]  # Wild Card, Divisional, Conf Champ, Super Bowl
+        now = datetime.now(timezone.utc)
+
+        for week in playoff_weeks:
+            url = f"{self.base_url}/scoreboard?seasontype=3&week={week}"
+            try:
+                response = httpx.get(url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    events = data.get("events", [])
+                    if events:
+                        # Check if any games are upcoming or in progress
+                        for event in events:
+                            game_date = parse_espn_datetime(event.get("date"))
+                            status = event.get("competitions", [{}])[0].get("status", {})
+                            is_final = status.get("type", {}).get("completed", False)
+
+                            # Return this week if game is not final or is in the future
+                            if not is_final or (game_date and game_date > now - timedelta(days=1)):
+                                debug.debug(f"NFL Board: Auto-detected playoff week {week}")
+                                return week
+            except Exception:
+                continue
+
+        return None
 
     def get_all_teams(self) -> Dict[str, NFLTeam]:
         """
@@ -842,6 +939,11 @@ class NFLDataSnapshot:
         # Team schedules for favorite teams
         self.team_schedules: Dict[str, List[NFLGame]] = {}
 
+        # Playoff data
+        self.playoff_games: List[NFLGame] = []
+        self.playoff_week: int = 0
+        self.playoff_round_name: str = ""
+
         # Dynamic division/conference mappings (built from API data)
         self._division_map: Optional[Dict[str, List[str]]] = None
         self._conference_map: Optional[Dict[str, List[str]]] = None
@@ -1035,6 +1137,7 @@ class NFLDataManager:
         """
         Ensure NFL data is loaded and available.
         Loads from cache if available, otherwise performs full refresh.
+        Also ensures playoff data is loaded if missing from existing snapshot.
         """
         existing_snapshot = getattr(self.data, "nfl_shared_snapshot", None)
         if existing_snapshot is None:
@@ -1044,6 +1147,16 @@ class NFLDataManager:
                 self._perform_data_refresh()
             else:
                 debug.info("NFL Data Manager: Successfully loaded snapshot from cache")
+        else:
+            # Snapshot exists, but check if playoff data needs to be loaded
+            if not existing_snapshot.playoff_games and existing_snapshot.playoff_week == 0:
+                debug.debug("NFL Data Manager: Snapshot exists but playoff data missing, loading playoff data")
+                playoff_games, playoff_week, playoff_round_name = self.api_client.get_playoff_scoreboard()
+                existing_snapshot.playoff_games = playoff_games
+                existing_snapshot.playoff_week = playoff_week
+                existing_snapshot.playoff_round_name = playoff_round_name
+                if playoff_games:
+                    debug.info(f"NFL Data Manager: Loaded {len(playoff_games)} playoff games for {playoff_round_name}")
 
     def start_refresh_scheduler(self, scheduler):
         """
@@ -1194,6 +1307,18 @@ class NFLDataManager:
                             if self.api_client._dict_to_game(game_dict)
                         ]
 
+            # Try to load playoff data from cache
+            cached_playoff = sb_cache.get("nfl_playoff_current", default=None, expire_time=False)
+            if cached_playoff:
+                debug.debug(f"NFL Data Manager: Found cached playoff data for week {cached_playoff.get('week')}")
+                snapshot.playoff_games = [
+                    self.api_client._dict_to_game(game_dict)
+                    for game_dict in cached_playoff.get('games', [])
+                    if self.api_client._dict_to_game(game_dict)
+                ]
+                snapshot.playoff_week = cached_playoff.get('week', 0)
+                snapshot.playoff_round_name = cached_playoff.get('round_name', '')
+
             # Store the snapshot
             self.data.nfl_shared_snapshot = snapshot
 
@@ -1267,6 +1392,14 @@ class NFLDataManager:
                 for team_id in self.team_ids:
                     team_schedule = self.api_client.get_team_schedule(team_id)
                     snapshot.team_schedules[team_id] = team_schedule
+
+            # Fetch playoff data (will be empty if not playoff season)
+            playoff_games, playoff_week, playoff_round_name = self.api_client.get_playoff_scoreboard()
+            snapshot.playoff_games = playoff_games
+            snapshot.playoff_week = playoff_week
+            snapshot.playoff_round_name = playoff_round_name
+            if playoff_games:
+                debug.info(f"NFL Data Manager: Found {len(playoff_games)} playoff games for {playoff_round_name}")
 
             # Store snapshot for all boards to use
             self.data.nfl_shared_snapshot = snapshot

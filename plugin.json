@@ -23,6 +23,12 @@
       "class_name": "NFLStandingsBoard",
       "module": "nfl_standings_board",
       "description": "Shows NFL division and conference standings"
+    },
+    {
+      "id": "nfl_playoff",
+      "class_name": "NFLPlayoffBoard",
+      "module": "nfl_playoff_board",
+      "description": "Shows upcoming NFL playoff matchups in ticker style"
     }
   ],
 

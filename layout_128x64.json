@@ -22,7 +22,7 @@
             "relative": {
                 "to": "record_header",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -31,7 +31,7 @@
             "relative": {
                 "to": "record",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -40,7 +40,7 @@
             "relative": {
                 "to": "record_comment",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -49,7 +49,7 @@
             "relative": {
                 "to": "next_game_header",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -58,7 +58,7 @@
             "relative": {
                 "to": "next_game_line_1",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -67,7 +67,7 @@
             "relative": {
                 "to": "next_game_line_2",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -76,7 +76,7 @@
             "relative": {
                 "to": "last_game_header",
                 "align": "left"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         },
@@ -85,7 +85,7 @@
             "relative": {
                 "to": "last_game_result",
                 "align": "right"
-            }, 
+            },
             "align": "left-top",
             "font": "small_2"
         }
@@ -120,6 +120,11 @@
             "align": "center",
             "font": "small_2"
         },
+        "playoff_round_name": {
+            "position":["50%", 0],
+            "align": "center",
+            "font": "small_2"
+        },
         "start_time": {
             "position":["50%", 0],
             "align": "center",
@@ -131,6 +136,15 @@
                 "to": "time_remaining",
                 "align": "left-bottom"
             }
+        },
+        "playoff_game_start_time": {
+            "position":[0, 1],
+            "relative": {
+                "to": "playoff_round_name",
+                "align": "center-bottom"
+            },
+            "align": "center",
+            "font": "small_2"
         },
         "VS": {
             "position": ["50%", "45%"],
