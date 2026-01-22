@@ -135,7 +135,7 @@ class NFLGameTickerBoard(BoardBase):
 
             if not self.current_games:
                 debug.debug("NFL Game Ticker: No games available")
-                self._render_no_games_available()
+                #self._render_no_games_available()
                 return
 
             # Loop through all games and display each one
