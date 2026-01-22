@@ -6,6 +6,11 @@
     "show_previous_games_until": "09:00",
     "enabled": true,
 
+    "_comment_playoff_games": "PLAYOFF GAMES: Set to true to show upcoming playoff games in playoff board style",
+    "show_upcoming_playoff_games": false,
+    "_comment_playoff_week": "PLAYOFF WEEK: Optional - manually specify playoff week number (auto-detected if omitted)",
+    "playoff_week": null,
+
     "_comment_division": "DIVISION CONFIG: Can be a single string OR a list of divisions/conferences to rotate through",
     "_comment_examples": "Single: 'NFC East' | Multiple: ['AFC East', 'NFC East', 'AFC North']",
     "_comment_shortcut": "SHORTCUT: Use 'AFC' or 'NFC' with display_type='division' to show ALL divisions in that conference",
