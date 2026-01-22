@@ -7,7 +7,7 @@
     "enabled": true,
 
     "_comment_playoff_games": "PLAYOFF GAMES: Set to true to show upcoming playoff games in playoff board style",
-    "show_upcoming_playoff_games": false,
+    "show_upcoming_playoff_games": true,
     "_comment_playoff_week": "PLAYOFF WEEK: Optional - manually specify playoff week number (auto-detected if omitted)",
     "playoff_week": null,
 
