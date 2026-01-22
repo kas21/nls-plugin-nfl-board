@@ -145,6 +145,8 @@ class NFLPlayoffBoard(BoardBase):
 
         # Render round name at top
         if hasattr(layout, 'playoff_round_name'):
+            # Remove period from "Conf. Champ."
+            round_name = round_name.replace(".", "")
             self.matrix.draw_text_layout(layout.playoff_round_name, round_name.upper())
 
         # Render "VS" in center
