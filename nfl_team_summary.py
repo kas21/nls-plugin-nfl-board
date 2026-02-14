@@ -31,18 +31,18 @@ class NFLTeamSummaryConfig:
     Use nfl_game_ticker for game displays.
     """
 
-    def __init__(self, config_data: dict):
+    def __init__(self, get_config):
         # Team configuration - must have at least one team
-        self.team_ids = self._parse_team_ids(config_data.get("team_ids", []))
+        self.team_ids = self._parse_team_ids(get_config("team_ids", []))
         if not self.team_ids:
             raise ValueError("NFL Board requires at least one team_id in configuration")
 
         # Display timing settings
-        self.display_seconds = int(config_data.get("display_seconds", 8))
-        self.refresh_seconds = int(config_data.get("refresh_seconds", 300))
+        self.display_seconds = int(get_config("display_seconds", 8))
+        self.refresh_seconds = int(get_config("refresh_seconds", 300))
 
         # Cache configuration - default to same as refresh_seconds
-        self.cache_expiration_seconds = int(config_data.get("cache_expiration_seconds", self.refresh_seconds))
+        self.cache_expiration_seconds = int(get_config("cache_expiration_seconds", self.refresh_seconds))
 
         debug.info(f"NFL Team Summary: Configured for teams {self.team_ids}")
         debug.info(f"NFL Team Summary: Display duration = {self.display_seconds}s")
@@ -79,7 +79,7 @@ class NFLTeamSummaryBoard(BoardBase):
 
         # Initialize configuration with validation
         try:
-            self.config = NFLTeamSummaryConfig(self.board_config)
+            self.config = NFLTeamSummaryConfig(self.get_config_value)
         except ValueError as error:
             debug.error(f"NFL Board configuration error: {error}")
             raise

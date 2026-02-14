@@ -26,11 +26,11 @@ class NFLStandingsBoard(BoardBase):
         self.board_version = __version__
         self.board_description = __description__
 
-        # Get configuration values with defaults
-        self.display_type = self.board_config.get("display_type", "division")  # 'division' or 'conference'
+        # Load config with automatic priority: central config -> board config -> defaults
+        self.display_type = self.get_config_value("display_type", "division")  # 'division' or 'conference'
 
         # Support both single string (backwards compatibility) and list of divisions/conferences
-        division_config = self.board_config.get("division", "NFC East")
+        division_config = self.get_config_value("division", "NFC East")
         if isinstance(division_config, str):
             self.divisions = self._expand_division_config([division_config])
         elif isinstance(division_config, list):
@@ -40,10 +40,10 @@ class NFLStandingsBoard(BoardBase):
             self.divisions = ["NFC East"]
 
         self.current_division_index = 0  # Track which division we're showing
-        self.display_seconds = self.board_config.get("display_seconds", 5)
-        self.scroll_speed = self.board_config.get("scroll_speed", 0.2)
-        self.use_large_font = self.board_config.get("use_large_font", True)
-        self.disable_win_pct = self.board_config.get("disable_win_pct", False)
+        self.display_seconds = self.get_config_value("display_seconds", 5)
+        self.scroll_speed = self.get_config_value("scroll_speed", 0.2)
+        self.use_large_font = self.get_config_value("use_large_font", True)
+        self.disable_win_pct = self.get_config_value("disable_win_pct", False)
 
         # Set up font and dimensions based on display size (same as NHL standings)
         if self.use_large_font and self.matrix.width >= 128:
@@ -73,8 +73,8 @@ class NFLStandingsBoard(BoardBase):
         # Initialize shared data manager (works independently of NFLBoard)
         # The data manager is a singleton, so if NFLBoard is also enabled, they'll share the same instance
         data_manager_config = {
-            "refresh_seconds": self.board_config.get("refresh_seconds", 300),
-            "cache_expiration_seconds": self.board_config.get("cache_expiration_seconds", 300),
+            "refresh_seconds": self.get_config_value("refresh_seconds", 300),
+            "cache_expiration_seconds": self.get_config_value("cache_expiration_seconds", 300),
             "team_ids": []  # Standings doesn't need favorite teams
         }
         self.data_manager = NFLDataManager.get_instance(data, data_manager_config)

@@ -26,24 +26,24 @@ NFL_TIMEZONE = ZoneInfo("America/New_York")
 class NFLGameTickerConfig:
     """Configuration for NFL Game Ticker board."""
 
-    def __init__(self, config_data: dict):
+    def __init__(self, get_config):
         # Team configuration - optional for this board
-        self.team_ids = self._parse_team_ids(config_data.get("team_ids", []))
+        self.team_ids = self._parse_team_ids(get_config("team_ids", []))
 
         # Display timing settings
-        self.display_seconds = int(config_data.get("display_seconds", 8))
-        self.refresh_seconds = int(config_data.get("refresh_seconds", 300))
-        self.cache_expiration_seconds = int(config_data.get("cache_expiration_seconds", self.refresh_seconds))
+        self.display_seconds = int(get_config("display_seconds", 8))
+        self.refresh_seconds = int(get_config("refresh_seconds", 300))
+        self.cache_expiration_seconds = int(get_config("cache_expiration_seconds", self.refresh_seconds))
 
         # Game display configuration
-        self.show_all_games = bool(config_data.get("show_all_games", False))
+        self.show_all_games = bool(get_config("show_all_games", False))
         self.show_previous_games_until_time = self._parse_cutoff_time(
-            config_data.get("show_previous_games_until", "06:00")
+            get_config("show_previous_games_until", "06:00")
         )
 
         # Playoff display configuration
-        self.show_upcoming_playoff_games = bool(config_data.get("show_upcoming_playoff_games", False))
-        self.playoff_week = config_data.get("playoff_week", None)
+        self.show_upcoming_playoff_games = bool(get_config("show_upcoming_playoff_games", False))
+        self.playoff_week = get_config("playoff_week", None)
         if self.playoff_week is not None:
             self.playoff_week = int(self.playoff_week)
 
@@ -105,7 +105,7 @@ class NFLGameTickerBoard(BoardBase):
 
         # Initialize configuration
         try:
-            self.config = NFLGameTickerConfig(self.board_config)
+            self.config = NFLGameTickerConfig(self.get_config_value)
         except ValueError as error:
             debug.error(f"NFL Game Ticker configuration error: {error}")
             raise
